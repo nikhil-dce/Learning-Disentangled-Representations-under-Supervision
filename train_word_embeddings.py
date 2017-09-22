@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import argparse
+import sys
 
+import cPickle as pkl
 import numpy as np
 import torch as t
 from torch.autograd import Variable
@@ -29,14 +31,26 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    data_files = [args.train_file]
-    data = [open(file, "r").read() for file in data_files]
+    print 'Train File: %s' % args.train_file
+    print 'Save Path: %s' % args.save_at
 
+    # Flag changes the preprocessing steps for pkl files
+    sentence_array = False
+
+    if args.train_file.endswith('.txt'):
+        data_files = [args.train_file]
+        data = [open(file, "r").read() for file in data_files]
+                
+    elif args.train_file.endswith('.pkl'):
+        data_files = [args.train_file]
+        data = [pkl.load(open(file, "rb")) for file in data_files]
+        sentence_array = True
+        
     idx_files = [args.save_at + '/words_vocab.pkl',
                       args.save_at + '/characters_vocab.pkl']
 
-    batch_loader = BatchLoader(data, idx_files, train_embedding=True)
-
+    batch_loader = BatchLoader(data, idx_files, train_embedding=True, sentence_array = sentence_array)
+    
     params = Parameters(batch_loader.max_word_len,
                         batch_loader.max_seq_len,
                         batch_loader.words_vocab_size,

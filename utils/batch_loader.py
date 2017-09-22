@@ -11,7 +11,7 @@ from .functional import *
 
 
 class BatchLoader:
-    def __init__(self, data, idx_files, common_count = None, train_embedding=False):
+    def __init__(self, data, idx_files, common_count = None, train_embedding=False, sentence_array = False):
 
         '''
             :properties
@@ -94,10 +94,10 @@ class BatchLoader:
         
         if train_embedding:
             print "BatchLoader Train Embedding...==========================>"
-            self.preprocess(data, idx_files)
+            self.preprocess(data, idx_files, is_sentence=sentence_array)
         elif idx_exists:
             print "BatchLoader Idx Exists...==========================>"
-            self.load_preprocessed(data, idx_files)
+            self.load_preprocessed(data, idx_files, is_sentence=sentence_array)
             print('preprocessed data was found and loaded')
         else:
             print 'Error: dictionaries do not exist.'
@@ -139,12 +139,21 @@ class BatchLoader:
         string = re.sub(r"\s{2,}", " ", string)
         return string.strip()
 
-    def build_character_vocab(self, data):
+    def build_character_vocab(self, data, is_sentence = False):
+        
+        if not is_sentence:
+            # unique characters with blind symbol
+            chars = list(set(data)) + [self.blind_symbol, self.pad_token, self.go_token, self.end_token]
+            chars_vocab_size = len(chars)
+            
+        else:
+            chars = set()
+            for sen in data:
+                chars = set(sen).union(chars)
 
-        # unique characters with blind symbol
-        chars = list(set(data)) + [self.blind_symbol, self.pad_token, self.go_token, self.end_token]
-        chars_vocab_size = len(chars)
-
+            chars = list(chars) + [self.blind_symbol, self.pad_token, self.go_token, self.end_token]
+            chars_vocab_size = len(chars)
+            
         # mappings itself
         idx_to_char = chars
         char_to_idx = {x: i for i, x in enumerate(idx_to_char)}
@@ -167,19 +176,26 @@ class BatchLoader:
 
         return words_vocab_size, idx_to_word, word_to_idx
 
-    def preprocess(self, data, idx_files):
-        
-        merged_data = data[0]
-
-        self.chars_vocab_size, self.idx_to_char, self.char_to_idx = self.build_character_vocab(merged_data)
+    def preprocess(self, data, idx_files, is_sentence = False):
+                
+        if not is_sentence:
+            merged_data = data[0] # using file 1 
+            data_words = [[line.split() for line in target.split('\n')] for target in data]
+            merged_data_words = merged_data.split()
+        else:
+            data_words = [[line.split() for line in target] for target in data]
+            merged_data = data[0] # Use file 1 Not: this is not compatible with multiple training files as of now
+            merged_data_words = []
+            for line in merged_data:
+                merged_data_words.extend(line.split())
+                        
+        self.chars_vocab_size, self.idx_to_char, self.char_to_idx = self.build_character_vocab(merged_data, is_sentence=is_sentence)
 
         with open(idx_files[1], 'wb') as f:
             cPickle.dump(self.idx_to_char, f)
 
-        data_words = [[line.split() for line in target.split('\n')] for target in data]
-        merged_data_words = merged_data.split()
-
         self.words_vocab_size, self.idx_to_word, self.word_to_idx = self.build_word_vocab(merged_data_words)
+        
         self.max_word_len = np.amax([len(word) for word in self.idx_to_word])
         self.max_seq_len = np.amax([len(line) for target in data_words for line in target])
         self.num_lines = [len(target) for target in data_words]
@@ -195,12 +211,15 @@ class BatchLoader:
     Requires data preprocessed data in the form of sentences 
     separated by '\n'
     '''
-    def load_preprocessed(self, data, idx_files):
+    def load_preprocessed(self, data, idx_files, is_sentence = False):
 
         # Following Data from training txt file
         # Data words for each line
-        data_words = [[line.split() for line in target.split('\n')] for target in data]
-        # Max sequence length
+        if not is_sentence:
+            data_words = [[line.split() for line in target.split('\n')] for target in data]
+        else: # Sentences already in array. No need for split ('\n')
+            data_words = [[line.split() for line in target] for target in data]
+            # Max sequence length
         self.max_seq_len = np.amax([len(line) for target in data_words for line in target])
         # Num lines in data array
         self.num_lines = [len(target) for target in data_words]
