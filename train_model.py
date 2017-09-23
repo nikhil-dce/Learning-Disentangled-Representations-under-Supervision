@@ -46,7 +46,7 @@ def main():
                         help='train file path (default: /data1/nikhil/sentence-corpus/generator/train.txt)')
     parser.add_argument('--embedding-path', type=str, default='/data1/nikhil/sentence-corpus/generator/word_embeddings.npy', metavar='EP',
                         help="ep path: (default: /data1/nikhil/sentence-corpus/generator/word_embeddings.npy)")
-    parser.add_argument('--save-model', type=str, default='/data1/nikhil/sentence-corpus/generator/trained_RVAE_layer2', metavar='NS',
+    parser.add_argument('--save-model', type=str, default='/data1/nikhil/sentence-corpus/generator/trained_RVAE_final', metavar='NS',
                         help='trained model save path (default: trained_RVAE)')
     parser.add_argument('--words-vocab-path', type=str, default='/data1/nikhil/sentence-corpus/generator/words_vocab.pkl', metavar='wv',
                         help="wv path: (default: /data1/nikhil/sentence-corpus/generator/words_vocab.pkl)")
@@ -115,19 +115,29 @@ def main():
         start_index = (start_index+args.batch_size)%num_line
         cross_entropy, kld, coef = train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
         
-        if iteration % 100 == 0:
+        if iteration % 1000 == 0:
             print('\n')
-            print('------------TRAIN-------------')
+
             print('----------ITERATION-----------')
             print(iteration)
+
             print('--------CROSS-ENTROPY---------')
-            print(cross_entropy.data.cpu().numpy()[0])
+            cross_entropy_loss = cross_entropy.data.cpu().numpy()[0]
+            print(cross_entropy_loss)
+
             print('-------------KLD--------------')
-            print(kld.data.cpu().numpy()[0])
+            kld_loss = kld.data.cpu().numpy()[0]
+            print(kld_loss)
+            
             print('-----------KLD-coef-----------')
             print(coef)
             print('------------------------------')
 
+            print('-----------TOTAL-LOSS-----------')
+            print(kld_loss + cross_entropy)
+            print('------------------------------')
+
+            
         if iteration % 20000 == 0:
             print ('\n')
             print ('Sampling')
