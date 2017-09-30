@@ -36,7 +36,7 @@ class Beam(object):
         # The outputs at each time-step.
         self.nextYs = [self.tt.LongTensor(size).fill_(self.pad)]
         self.nextYs[0][0] = self.bos
-
+        
         # The attentions (matrix) for each time.
         self.attn = []
 

@@ -13,6 +13,7 @@ from utils.functional import kld_coef, parameters_allocation_check, fold
 from utils.beam_search import Beam
 
 class RVAE(nn.Module):
+
     def __init__(self, params, embedding_path):
         super(RVAE, self).__init__()
 

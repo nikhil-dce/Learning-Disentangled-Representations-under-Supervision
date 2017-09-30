@@ -255,10 +255,11 @@ class BatchLoader:
         max_input_seq_len = np.amax(input_seq_len)
 
         encoded_words = [[idx for idx in line] for line in encoder_word_input]
+        
         decoder_word_input = [[self.word_to_idx[self.go_token]] + line for line in encoder_word_input]
         decoder_character_input = [[self.encode_characters(self.go_token)] + line for line in encoder_character_input]
         decoder_output = [line + [self.word_to_idx[self.end_token]] for line in encoded_words]
-
+                
         # sorry
         for i, line in enumerate(decoder_word_input):
             line_len = input_seq_len[i]
