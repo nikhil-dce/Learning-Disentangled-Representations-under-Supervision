@@ -160,8 +160,7 @@ class RVAE(nn.Module):
         seed = Variable(seed)
         if use_cuda:
             seed = seed.cuda()
-
-        print seed.size()
+        
         decoder_word_input_np, decoder_character_input_np = batch_loader.go_input(1)
 
         decoder_word_input = Variable(t.from_numpy(decoder_word_input_np).long())

@@ -115,7 +115,7 @@ def main():
         start_index = (start_index+args.batch_size)%num_line
         cross_entropy, kld, coef = train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
         
-        if iteration % 1000 == 0:
+        if iteration % 100 == 0:
             print('\n')
 
             print('----------ITERATION-----------')
@@ -134,19 +134,19 @@ def main():
             print('------------------------------')
 
             print('-----------TOTAL-LOSS-----------')
-            print(kld_loss + cross_entropy)
+            print(kld_loss + cross_entropy_loss)
             print('------------------------------')
 
             
-        if iteration % 20000 == 0:
+        if iteration % 2000 == 0:
             print ('\n')
             print ('Sampling')
 
             sample(rvae, parameters, batch_loader, args.use_cuda)
-            t.save(rvae.state_dict(), args.save_model + ("_%d"%iteration))
+            #t.save(rvae.state_dict(), args.save_model + ("_%d"%iteration))
 
             
-    t.save(rvae.state_dict(), args.save_model)
+    #t.save(rvae.state_dict(), args.save_model)
 #     np.save('ce_result_{}.npy'.format(args.ce_result), np.array(ce_result))
 #     np.save('kld_result_npy_{}'.format(args.kld_result), np.array(kld_result))
 
