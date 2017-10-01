@@ -17,7 +17,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='Controlled_Generation_Sentence')
 
-    parser.add_argument('--rvae-initial-iterations', type=int, default=100000)
+    parser.add_argument('--rvae-initial-iterations', type=int, default=120000)
     parser.add_argument('--discriminator-iterations', type=int, default=1000)
     parser.add_argument('--generator-iterations', type=int, default=1000)
     parser.add_argument('--batch-size', type=int, default=32)

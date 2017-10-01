@@ -14,6 +14,8 @@ from utils.beam_search import Beam
 
 from utils.functional import kld_coef
 
+import sys
+
 class Controlled_Generation_Sentence(nn.Module):
 
     def __init__(self, config, embedding_path):
@@ -25,8 +27,8 @@ class Controlled_Generation_Sentence(nn.Module):
 
         self.encoder = Encoder(self.config)
 
-        self.e2mu = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size+1)
-        self.e2logvar = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size+1)
+        self.e2mu = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size)
+        self.e2logvar = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size)
 
         self.generator = Generator(self.config)
         # self.sentiment_discriminator = Sentiment_Discriminator
@@ -48,14 +50,19 @@ class Controlled_Generation_Sentence(nn.Module):
 
         z = Variable(t.randn([batch_size, self.config.latent_variable_size]))
 
+        if use_cuda:
+            z = z.cuda()
+            
+        z = z * std + mu
+        
         init_prob = t.ones(batch_size, 1)*0.5
         c = Variable(t.bernoulli(init_prob), requires_grad=False)
-                
-        input_code = t.cat((z,c), 1)
-        
+
         if use_cuda:
-            input_code = input_code.cuda()
-            
+            c = c.cuda()
+        
+        input_code = t.cat((z,c), 1)
+                    
         kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
 
         generator_input = self.embedding.word_embed(generator_word_input)
@@ -124,10 +131,19 @@ class Controlled_Generation_Sentence(nn.Module):
                 [b.get_current_state() for b in beam if not b.done]
             ).t().contiguous().view(1, -1)
             # input becomes (1, beam_size * batch_size)
-            
+
+            """
+            print input[0][0]
+            print input[0][1]
+            print input[0][18]
+            print input[0][2]
+            print input[0][10]
+
+            sys.exit(0)
+            """
             trg_emb = self.embedding.word_embed(Variable(input).transpose(1, 0))
             # trg_emb.size() => (beam_size*batch_size, 1, embedding_size)
-            
+                        
             trg_h, dec_states = self.generator.only_decoder_beam(trg_emb, seed, drop_prob, dec_states)
             # trg_h.size() => (beam_size*batch_size, 1, gen_rnn_size)
             # dec_states => tuple of hidden states and cell state
@@ -144,6 +160,7 @@ class Controlled_Generation_Sentence(nn.Module):
                 -1
             ).transpose(0, 1).contiguous()
             # word_lk.size() => (remaining_sents, beam_size, vocab_size)
+                        
             active = []
             for b in range(batch_size):
                 if beam[b].done:
@@ -157,18 +174,19 @@ class Controlled_Generation_Sentence(nn.Module):
                 for dec_state in dec_states:  # iterate over h, c
                     # layers x beam*sent x dim
                     sent_states = dec_state.view(
-                        -1, beam_size, remaining_sents, dec_state.size(2)
-                    )[:, :, idx] 
+                        dec_state.size(0), beam_size, remaining_sents, dec_state.size(2)
+                    )
 
-                    # sent_states.size() => (layers, beam_size, gen_rnn_size)
                     
-                    sent_states.data.copy_(
-                        sent_states.data.index_select(
+                    # sent_states.size() => (layers, beam_size, gen_rnn_size)
+                                        
+                    sent_states[:,:,idx,:].data.copy_(
+                        sent_states[:,:,idx,:].data.index_select(
                             1,
                             beam[b].get_current_origin()
                         )
                     )
-
+                        
             if not active:
                 break
 
@@ -194,6 +212,8 @@ class Controlled_Generation_Sentence(nn.Module):
                 update_active(dec_states[0]),
                 update_active(dec_states[1])
             )
+                        
+            print 'Remaining Sents: %d ' % remaining_sents
             dec_out = update_active(dec_out)
             remaining_sents = len(active) 
 
@@ -213,9 +233,8 @@ class Controlled_Generation_Sentence(nn.Module):
         all_sent_codes = np.asarray(allHyp)
         print all_sent_codes.shape
         
-        all_sent_codes = np.transpose(allHyp, (0,2,1))
-        print all_sent_codes.shape
-        print all_sent_codes
+        #all_sent_codes = np.transpose(allHyp, (0,2,1))
+        #print all_sent_codes
         
         all_sentences = []
         for batch in all_sent_codes:
@@ -229,7 +248,7 @@ class Controlled_Generation_Sentence(nn.Module):
                     sentence += ' ' + word
                 sentences.append(sentence)
 
-            all_sentences.extend(sentences)
+            all_sentences.append(sentences)
         
 
         """
@@ -264,12 +283,16 @@ class Controlled_Generation_Sentence(nn.Module):
             
         return all_sentences, allScores 
 
-    def sample(self, data_handler, config, use_cuda=True):
+    def sample(self, data_handler, config, use_cuda=True, print_sentences = True):
 
-        samp = 2
+        samp = 10
         seed = t.randn([samp, config.latent_variable_size+1])
-        sentences, result_score = self.sample_beam_for_decoder(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, samples=samp)
+        sentences, result_score = self.sample_beam_for_decoder(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best = 1, samples=samp)
 
-        print len(sentences)
-        for s in sentences:
-            print s
+        if print_sentences:
+            print len(sentences)
+            for s in sentences:
+                sen = ""
+                for word in s:
+                    sen += word
+                print sen

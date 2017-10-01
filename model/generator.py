@@ -24,16 +24,17 @@ class Generator(nn.Module):
     def only_decoder_beam (self, generator_input, zc, drop_prob, initial_state = None):
 
         [beam_batch_size, _, _] = generator_input.size()
-
+        
         # generator_input = F.dropout(generator_input, drop_prob)
         zc = zc.unsqueeze(1)
-        zc = t.cat([zc] * (beam_batch_size/zc.size(0)), 1)
+        zc = t.cat([zc] * (beam_batch_size/zc.size(0)), 0)
         zc = zc.contiguous().view(beam_batch_size, 1, -1)
+        
         # zc.size() => (beam_batch_size X 1 X latent_variable_size+c_size)
                 
         # zc = zc.unsqueeze(0)
         # zc = t.cat([zc] * beam_batch_size, 0)
-                
+        
         generator_input = t.cat([generator_input, zc], 2)
 
         rnn_out, final_state = self.rnn(generator_input, initial_state)
