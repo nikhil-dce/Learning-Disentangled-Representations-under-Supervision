@@ -24,3 +24,9 @@ class Config:
 
         self.decoder_rnn_size = 600
         self.decoder_num_layers = 2
+
+
+        # Sentiment Discriminator
+        self.sentiment_kernel_size = [3,4,5]
+        self.sentiment_kernel_num = 100
+        self.sentiment_dropout = 0.3

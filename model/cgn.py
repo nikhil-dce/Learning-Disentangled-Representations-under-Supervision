@@ -10,7 +10,7 @@ from .encoder import Encoder
 from .generator import Generator
 from selfModules.embedding import Embedding
 from utils.beam_search import Beam
-# from .discriminator_sentiment import Sentiment_Discriminator
+from .discriminator_sentiment import Sentiment_CNN
 
 from utils.functional import kld_coef
 
@@ -31,7 +31,7 @@ class Controlled_Generation_Sentence(nn.Module):
         self.e2logvar = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size)
 
         self.generator = Generator(self.config)
-        # self.sentiment_discriminator = Sentiment_Discriminator
+        self.sentiment_discriminator = Sentiment_CNN(self.config)
 
     def train_initial_rvae(self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
 
@@ -70,6 +70,42 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return out, final_state, kld, mu, std
 
+    def discriminator_sentiment_trainer (self, data_handler):
+
+        # get the relevant model parameters
+        optimizer = t.optim.Adam(self.sentiment_discriminator_parameters(), self.config.learning_rate)
+
+        print self.sentiment_discriminator
+        exit()
+        
+        def train(i, start_index):
+
+            # Whis should give samples from both the generator and discriminator dataset
+            # These should be torch tensors as one-hot vectors (discriminator dataset) or softmax outputs (Generated sentences)
+            # expected dimenstion is (batch_size, seq_len, vocab_size)
+            batch_train_X, batch_train_Y = data_handler.get_train_batch(batch_index)
+
+            # Check if batch_train_X and batch_train_Y are autograd variables
+            # make them cuda if needed
+
+            optimizer.zero_grad()
+
+            logit = self.discriminator_sentiment(batch_train_X)
+
+            # equivalent to loss = F.cross_entropy(logit, target)
+            log_softmax = F.log_softmax(logit)
+            total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
+            loss = total_batch_loss / data_handler.batch_size
+
+            loss.backward()
+            optimizer.step()
+
+            # return the total_batch_loss
+            # can be used to calculate the total epoch loss
+            return total_batch_loss
+
+        return train
+
     def initial_trainer(self, data_handler):
 
         optimizer = Adam(self.learnable_parameters(), self.config.learning_rate)
@@ -99,12 +135,16 @@ class Controlled_Generation_Sentence(nn.Module):
             return cross_entropy, kld, kld_coef(i)
 
         return train
-        
+
+    def sentiment_discriminator_parameters(self):
+
+        return [p for p in self.sentiment_discriminator.parameters() if p.requires_grad]
+    
     def learnable_parameters(self):
         # word_embedding is constant parameter thus it must be dropped from list of parameters for optimizer
         return [p for p in self.parameters() if p.requires_grad]
 
-    def sample_beam_for_decoder (self, batch_loader, seq_len, seed,
+    def sample_from_generator (self, batch_loader, seq_len, seed,
                                  use_cuda, beam_size = 10, n_best = 1, samples=5):
 
         seed = Variable(seed)
@@ -132,15 +172,6 @@ class Controlled_Generation_Sentence(nn.Module):
             ).t().contiguous().view(1, -1)
             # input becomes (1, beam_size * batch_size)
 
-            """
-            print input[0][0]
-            print input[0][1]
-            print input[0][18]
-            print input[0][2]
-            print input[0][10]
-
-            sys.exit(0)
-            """
             trg_emb = self.embedding.word_embed(Variable(input).transpose(1, 0))
             # trg_emb.size() => (beam_size*batch_size, 1, embedding_size)
                         
@@ -213,7 +244,7 @@ class Controlled_Generation_Sentence(nn.Module):
                 update_active(dec_states[1])
             )
                         
-            print 'Remaining Sents: %d ' % remaining_sents
+            # print 'Remaining Sents: %d ' % remaining_sents
             dec_out = update_active(dec_out)
             remaining_sents = len(active) 
 
@@ -287,7 +318,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
         samp = 10
         seed = t.randn([samp, config.latent_variable_size+1])
-        sentences, result_score = self.sample_beam_for_decoder(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best = 1, samples=samp)
+        sentences, result_score = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best = 1, samples=samp)
 
         if print_sentences:
             print len(sentences)
@@ -296,3 +327,5 @@ class Controlled_Generation_Sentence(nn.Module):
                 for word in s:
                     sen += word
                 print sen
+
+    
