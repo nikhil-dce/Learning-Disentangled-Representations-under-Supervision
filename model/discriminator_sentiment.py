@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch.autograd import Variable
 import sys
 
 class Sentiment_CNN(nn.Module):
@@ -50,6 +51,7 @@ class Sentiment_CNN(nn.Module):
         self.conv14 = nn.Conv2d(Ci, Co, (4, D))
         self.conv15 = nn.Conv2d(Ci, Co, (5, D))
         '''
+
         self.dropout = nn.Dropout(config.sentiment_dropout)
         self.fc1 = nn.Linear(len(Ks)*Co, C)
 
@@ -58,25 +60,7 @@ class Sentiment_CNN(nn.Module):
         x = F.max_pool1d(x, x.size(2)).squeeze(2)
         return x
 
-
-    def feature_from_indices(self, x):
-
-        """
-        Here for one-hot args.embed_dim is |V|
-        """
-        # x : (batch_size,  max_seq_len_in_batch)
-        x_inp = torch.unsqueeze(x, 2)
-        
-        batch_size = x.size(0)
-        max_seq_len_in_batch = x.size(1)
-        
-        one_hot = torch.FloatTensor(batch_size, max_seq_len_in_batch, self.args.embed_dim)
-        one_hot = one_hot.zero_()
-        one_hot.scatter_(2, x_inp, 1)
-
-        return one_hot
-
-    def train():
+    def train(self):
         self.training_mode = True
         super(Sentiment_CNN, self).train()
         
@@ -92,7 +76,7 @@ class Sentiment_CNN(nn.Module):
             x = Variable(x)
         else:
             # Forward pass when gradient back propagated to generator
-            x = Variable(x, requires_grad)
+            x = Variable(x, requires_grad=True)
 
         x = x.unsqueeze(1) # (N,Ci,W,D)
 

@@ -70,27 +70,39 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return out, final_state, kld, mu, std
 
-    def discriminator_sentiment_trainer (self, data_handler):
+    def discriminator_sentiment_trainer (self, data_handler, use_cuda):
 
+        # Set train mode. Do not pass gradient to the generator
+        self.sentiment_discriminator.train()
+
+        # print self.sentiment_discriminator.state_dict()
+        # for name, param in self.named_parameters():
+            # print name + ' ' + str(param.requires_grad)
+        
+        #self.encoder_params(auto_grad=False)
+        #self.generator_params(auto_grad=False)
+        
         # get the relevant model parameters
         optimizer = t.optim.Adam(self.sentiment_discriminator_parameters(), self.config.learning_rate)
+               
+        def train(i, batch_index):
 
-        print self.sentiment_discriminator
-        exit()
-        
-        def train(i, start_index):
-
-            # Whis should give samples from both the generator and discriminator dataset
+            # This should give samples from both the generator and discriminator dataset
             # These should be torch tensors as one-hot vectors (discriminator dataset) or softmax outputs (Generated sentences)
             # expected dimenstion is (batch_size, seq_len, vocab_size)
-            batch_train_X, batch_train_Y = data_handler.get_train_batch(batch_index)
+            batch_train_X, batch_train_Y = data_handler.get_sentiment_train_batch(batch_index)
+            # Torch tensors
+            if use_cuda:
+                batch_train_X = batch_train_X.cuda()
+                batch_train_Y = batch_train_Y.cuda()
 
+            batch_train_Y = Variable(batch_train_Y)
             # Check if batch_train_X and batch_train_Y are autograd variables
             # make them cuda if needed
 
             optimizer.zero_grad()
 
-            logit = self.discriminator_sentiment(batch_train_X)
+            logit = self.sentiment_discriminator(batch_train_X)
 
             # equivalent to loss = F.cross_entropy(logit, target)
             log_softmax = F.log_softmax(logit)
@@ -106,8 +118,8 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return train
 
-    def initial_trainer(self, data_handler):
-
+    def initial_rvae_trainer(self, data_handler):
+        
         optimizer = Adam(self.learnable_parameters(), self.config.learning_rate)
         def train(i, batch_size, use_cuda, dropout, start_index):
 
@@ -136,8 +148,14 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return train
 
-    def sentiment_discriminator_parameters(self):
+    def encoder_params(self, auto_grad):
 
+        if auto_grad is None:
+            sys.exit()
+            
+            
+
+    def sentiment_discriminator_parameters(self):
         return [p for p in self.sentiment_discriminator.parameters() if p.requires_grad]
     
     def learnable_parameters(self):
@@ -327,5 +345,3 @@ class Controlled_Generation_Sentence(nn.Module):
                 for word in s:
                     sen += word
                 print sen
-
-    

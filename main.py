@@ -23,17 +23,17 @@ This should help analyze the training progress
 
 """
 
-def train_sentiment_discriminator(cgn_model, data_handler, num_epochs):
+def train_sentiment_discriminator(cgn_model, data_handler, num_epochs, use_cuda):
 
     print 'Train Sentiment Discriminator'
     
-    sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler)
+    sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler, use_cuda)
     # validate_step ?
 
     step = 0
     num_train_batches = data_handler.num_train_sentiment_batches
 
-    for epoch in range(1, num_epochs):
+    for epoch in range(0, num_epochs):
 
         epoch_loss = 0
 
@@ -55,7 +55,8 @@ def train_sentiment_discriminator(cgn_model, data_handler, num_epochs):
                 print ('Batch Loss: %f' % loss_val)
 
             step += 1
-            
+
+        epoch += 1
         print('\n')
         print ('------------------------')
         print ('Epoch: %d' % epoch)
@@ -121,7 +122,7 @@ def main():
 
         start_iteration = 0
         
-        initial_train_step = cgn_model.initial_trainer(data_handler)
+        initial_train_step = cgn_model.initial_rvae_trainer(data_handler)
         # initial_validate_step ?
 
         start_index = 0
@@ -162,7 +163,7 @@ def main():
         
         # Discriminator Training Data
         data_handler.load_discriminator(args.sentiment_discriminator_train_file)    
-        train_sentiment_discriminator(cgn_model, data_handler, args.discriminator_epochs)
+        train_sentiment_discriminator(cgn_model, data_handler, args.discriminator_epochs, args.use_cuda)
         
     sys.exit(0)
     

@@ -16,6 +16,9 @@ class Embedding(nn.Module):
         word_embed = np.load(emb_file) 
 
         self.word_embed = nn.Embedding(self.params.word_vocab_size, self.params.word_embed_size)
+
+        print 'Embedding Matrix Size:'
+        print self.word_embed.weight.size()
         self.char_embed = nn.Embedding(self.params.char_vocab_size, self.params.char_embed_size)
         self.word_embed.weight = Parameter(t.from_numpy(word_embed).float(), requires_grad=False)
         self.char_embed.weight = Parameter(
