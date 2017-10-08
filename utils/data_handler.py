@@ -90,6 +90,34 @@ class DataHandler:
 
         return batch_train_X, batch_train_Y
 
+    def create_generator_batch(self, x_gen, use_cuda):
+
+        gen_batch_sen_len = [len(sentence) for sentence in x_gen]
+
+        one_hot = t.FloatTensor(self.vocab_size)
+        one_hot = one_hot.zero_()
+        one_hot[self.gen_batch_loader.word_to_idx[self.gen_batch_loader.pad_token]] = 1
+
+        if use_cuda:
+            one_hot = one_hot.cuda()
+    
+        max_seq_len = np.amax(gen_batch_sen_len)
+
+        for i, line in enumerate(x_gen):
+    
+            line_len = len(line)
+            to_add = max_seq_len - line_len
+            line = line + [one_hot]*to_add
+            line = t.stack(line, dim=0)
+            x_gen[i] = line
+    
+        print len(x_gen)
+        x_gen = t.stack(x_gen, dim=0)
+        print x_gen.size(), type(x_gen)
+
+        return x_gen
+
+    # Change this function for tensor stack like above
     def get_sentiment_dev_batch(self, batch_index):
 
         batch_indices = np.arange(batch_index*self.batch_size, (batch_index+1)*self.batch_size)
@@ -108,7 +136,7 @@ class DataHandler:
 
         batch_dev_X = np.array(batch_dev_X)
         batch_dev_Y = np.array(batch_dev_Y)
-
+            
     def feature_from_indices(self, x):
         """
         Get one-hot vector for x

@@ -1,3 +1,6 @@
+__author__ = "Nikhil Mehta"
+__copyright__ = "--"
+
 import numpy as np
 import torch as t
 import torch.nn as nn
@@ -24,14 +27,17 @@ class Controlled_Generation_Sentence(nn.Module):
 
         self.config = config
         self.embedding = Embedding(self.config, embedding_path)
-
+        
         self.encoder = Encoder(self.config)
-
+        self.encoder_param_autograd = [1 if param.requires_grad else 0 for param in self.encoder.parameters()]
+        
         self.e2mu = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size)
         self.e2logvar = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size)
 
         self.generator = Generator(self.config)
+
         self.sentiment_discriminator = Sentiment_CNN(self.config)
+        self.sentiment_discriminator_autograd = [1 if param.requires_grad else 0 for param in self.sentiment_discriminator.parameters()]
 
     def train_initial_rvae(self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
 
@@ -70,6 +76,37 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return out, final_state, kld, mu, std
 
+    def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator, batch_size):
+
+        # batch_size here can be increased for faster forward propagation
+
+        self.sentiment_discriminator.set_pass_gradient_to_generator(pass_gradient_to_generator)
+        self.sentiment_discriminator.eval()
+        
+        def discriminator_forward(batch_index):
+            
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
+            [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
+
+            encoder_word_input = t.from_numpy(encoder_word_input)
+            sentence_hot_input = data_handler.feature_from_indices(encoder_word_input)
+            sentence_hot_input = Variable(sentence_hot_input)
+            
+            if use_cuda:
+                sentence_hot_input = sentence_hot_input.cuda()
+                        
+            logit = self.sentiment_discriminator(sentence_hot_input)
+
+            # equivalent to loss = F.cross_entropy(logit, target)
+            softmax = F.softmax(logit)
+            
+            # bernoulli here with softmax[:,1]
+            c = t.bernoulli(softmax[:, 1])
+                        
+            return c.data
+            
+        return discriminator_forward
+        
     def discriminator_sentiment_trainer (self, data_handler, use_cuda):
 
         # Set train mode. Do not pass gradient to the generator
@@ -97,9 +134,13 @@ class Controlled_Generation_Sentence(nn.Module):
                 batch_train_Y = batch_train_Y.cuda()
 
             batch_train_Y = Variable(batch_train_Y)
+                        
             # Check if batch_train_X and batch_train_Y are autograd variables
             # make them cuda if needed
 
+            # check if the autograd needs to True. Should be true when training generator
+            batch_train_X = Variable(batch_train_X)
+            
             optimizer.zero_grad()
 
             logit = self.sentiment_discriminator(batch_train_X)
@@ -152,9 +193,18 @@ class Controlled_Generation_Sentence(nn.Module):
 
         if auto_grad is None:
             sys.exit()
-            
-            
 
+    def discriminator_mode(self, train_mode=True):
+
+        print 'Discriminator Train: %d' % train_mode
+        for i, param in enumerate(self.sentiment_discriminator.parameters()):
+            
+            if train_mode:
+                if self.sentiment_discriminator_autograd[i]:
+                    param.requires_grad = True
+            else:
+                param.requires_grad = False
+                
     def sentiment_discriminator_parameters(self):
         return [p for p in self.sentiment_discriminator.parameters() if p.requires_grad]
     
@@ -163,16 +213,16 @@ class Controlled_Generation_Sentence(nn.Module):
         return [p for p in self.parameters() if p.requires_grad]
 
     def sample_from_generator (self, batch_loader, seq_len, seed,
-                                 use_cuda, beam_size = 10, n_best = 1, samples=5):
-
+                               use_cuda, beam_size = 10, n_best = 1, samples=5,
+                               learning = False):
+        
         seed = Variable(seed)
         if use_cuda:
             seed = seed.cuda()
 
         # seed = seed.unsqueeze(1)
         # seed = t.cat([seed] * beam_size, 1)
-
-        print seed
+        # print seed
         # State see the shape
         dec_states = None
         drop_prob = 0.0
@@ -202,14 +252,14 @@ class Controlled_Generation_Sentence(nn.Module):
             
             out = F.softmax(self.generator.fc(dec_out)).unsqueeze(0)
             # out.size() => (1, beam_size*batch_size, vocab_size)
-
+                        
             word_lk = out.view(
                 beam_size,
                 remaining_sents,
                 -1
             ).transpose(0, 1).contiguous()
             # word_lk.size() => (remaining_sents, beam_size, vocab_size)
-                        
+
             active = []
             for b in range(batch_size):
                 if beam[b].done:
@@ -224,27 +274,29 @@ class Controlled_Generation_Sentence(nn.Module):
                     # layers x beam*sent x dim
                     sent_states = dec_state.view(
                         dec_state.size(0), beam_size, remaining_sents, dec_state.size(2)
-                    )
+                    )[:,:,idx,:]
 
                     
                     # sent_states.size() => (layers, beam_size, gen_rnn_size)
-                                        
-                    sent_states[:,:,idx,:].data.copy_(
-                        sent_states[:,:,idx,:].data.index_select(
+
+                    
+                    sent_states.data.copy_(
+                        sent_states.data.index_select(
                             1,
                             beam[b].get_current_origin()
                         )
                     )
-                        
+                
             if not active:
                 break
-
+            
             # in this section, the sentences that are still active are
             # compacted so that the decoder is not run on completed sentences
             active_idx = t.cuda.LongTensor([batch_idx[k] for k in active])
             batch_idx = {beam: idx for idx, beam in enumerate(active)}
 
             def update_active(t):
+                # t.size() => (beam*remaining_sentences, decoder_rnn_size)
                 # select only the remaining active sentences
                 view = t.data.view(
                     -1, remaining_sents,
@@ -264,78 +316,69 @@ class Controlled_Generation_Sentence(nn.Module):
                         
             # print 'Remaining Sents: %d ' % remaining_sents
             dec_out = update_active(dec_out)
-            remaining_sents = len(active) 
+            remaining_sents = len(active)
+            
 
          # (4) package everything up
-
+                
         allHyp, allScores = [], []
-
+        allHyp_probs = []
         for b in range(batch_size):
             scores, ks = beam[b].sort_best()
             allScores += [scores[:n_best]]
             hyps = zip(*[beam[b].get_hyp(k) for k in ks[:n_best]])
+            hyp_probs = beam[b].get_hyp_probs() 
             allHyp += [hyps]
-
+            allHyp_probs += [hyp_probs]
+            
         word_hyp = []
         result = []
                 
         all_sent_codes = np.asarray(allHyp)
-        print all_sent_codes.shape
+        all_sent_probs = np.asarray(allHyp_probs)
+
+        #print all_sent_probs.shape
+
+        #print 'prob sen 1 size: %d' % len(all_sent_probs[0])
+        #print len(all_sent_probs[0][2])
+        #s = np.argsort(np.array(all_sent_probs[0][2].tolist()))[-10:]
         
+        #print list(map(batch_loader.decode_word, s))
+        #print all_sent_codes[0][0]
         #all_sent_codes = np.transpose(allHyp, (0,2,1))
         #print all_sent_codes
+
+        if learning:
+            return all_sent_probs
+        else :
+            all_sentences = []
+            for batch in all_sent_codes:
+                sentences = []
+
+                for i_best in batch:
+                    sentence = ""
+                    for word_code in i_best:
+                        word = batch_loader.decode_word(word_code)
+                        if word == batch_loader.end_token:
+                            break
+                        sentence += ' ' + word
+                    sentences.append(sentence)
+
+                all_sentences.append(sentences)
         
-        all_sentences = []
-        for batch in all_sent_codes:
-            sentences = []
-            for i_best in batch:
-                sentence = ""
-                for word_code in i_best:
-                    word = batch_loader.decode_word(word_code)
-                    if word == batch_loader.end_token:
-                        break
-                    sentence += ' ' + word
-                sentences.append(sentence)
-
-            all_sentences.append(sentences)
-        
-
-        """
-        for hyp in allHyp:
-
-            sentence = []
-            
-            for i_step in range(seq_len):
-
-                for idx in range(n_best):
-
-                    if sentence[i_step][idx] == batch_loader.end_token:
-                        continue;
-
-                    
-                for word_idx in hyp[i_step]:
-
-                    if sentence[i_step][]
-                    word = batch_loader.decode_word(word_idx)
-                    # temp = map(batch_loader.decode_word, hyp[i_step])
-
-                    if word == batch_loader.end_token:
-                        break
-
-                result += ' ' + word
-
-                
-                print temp
-                word_hyp += temp
-                
-        """
-            
-        return all_sentences, allScores 
+            return all_sentences, allScores 
 
     def sample(self, data_handler, config, use_cuda=True, print_sentences = True):
 
         samp = 10
-        seed = t.randn([samp, config.latent_variable_size+1])
+        seed_z = t.randn([samp, config.latent_variable_size])
+        init_prob = t.ones(samp, 1)*0.5
+        seed_c = t.bernoulli(init_prob)
+        
+        seed = t.cat((seed_z, seed_c), 1)
+
+        print seed.size()
+        
         sentences, result_score = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best = 1, samples=samp)
 
         if print_sentences:
@@ -345,3 +388,34 @@ class Controlled_Generation_Sentence(nn.Module):
                 for word in s:
                     sen += word
                 print sen
+
+    def sample_generator_for_learning(self, data_handler, config, use_cuda = True):
+
+        """
+        This function uses the current state of the generator to sample.
+        
+        Parameters:
+        * data_handler: Data handler to create batch
+        * config: model configuration object
+        * use_cuda: cuda flag
+
+        Returns:
+        * generated_samples: softmax outputs of the generator
+        * seed_c: the corresponding structured codeword
+        """
+        sample = 10
+        seed_z = t.randn([sample, config.latent_variable_size])
+        init_prob = t.ones(sample, 1) * 0.5
+        seed_c = t.bernoulli(init_prob)
+
+        seed = t.cat((seed_z, seed_c), 1)
+
+        generated_samples = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best=1,  samples=sample, learning=True)
+        generated_samples = data_handler.create_generator_batch(generated_samples, use_cuda)
+
+        if use_cuda:
+            seed_c = seed_c.cuda()
+            
+        return generated_samples, seed_c
+        
+        

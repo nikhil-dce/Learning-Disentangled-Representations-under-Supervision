@@ -1,3 +1,6 @@
+__author__ = "Nikhil Mehta"
+__copyright__ = "--"
+
 import argparse
 import os
 import sys
@@ -14,22 +17,99 @@ from model.cgn import Controlled_Generation_Sentence
 ROOT_DIR = '/data1/nikhil/sentence-corpus/'
 
 """
-
 TODO
-
 Create separate training params for generator and discriminator and then average them
 This should help analyze the training progress 
-
-
 """
 
-def train_sentiment_discriminator(cgn_model, data_handler, num_epochs, use_cuda):
+def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs, use_cuda):
+    """
+    Trains encoder-generator while keeping the discriminator fixed using the following loss functions:
+    - encoder using Loss = VAE Loss = KLD + Cross Entropy Loss
+    - generator using Loss = VAE Loss + disc_coeff*Discriminator Cross Entropy Using generated sentence softmax + encoder_coeff*Encoder L2 Loss  
+    """
 
+    cgn_model.discriminator_mode(train_mode=False)
+    # First fix the discriminator. Switch of the gradients by setting autograd to False
+
+    pass_gradient_to_generator = False
+    batch_size = 500
+    discriminator_forward = cgn_model.discriminator_forward_function (data_handler, use_cuda, pass_gradient_to_generator, batch_size)
+        
+    num_line = (data_handler.gen_batch_loader.num_lines[0])
+    num_line = num_line - num_line % batch_size
+    num_batches = num_line / batch_size
+
+    print 'Num batches: %d' % num_batches 
+    c = []
+    for batch_index in range(num_batches):
+        c_batch = discriminator_forward(batch_index)
+        c.append(c_batch)
+        if batch_index % 50 == 0:
+            print 'Batch: %d' % batch_index
+
+    print len(c)
+    sys.exit(0)
+    
+    print 'Begin Step 1. Initial VAE Training. Num Batches: ' + str(num_batches)
+
+    for epoch in range(start_iteration, num_epochs):
+
+        epoch_loss = 0
+
+        for batch_index in range(num_batches):
+
+            # returns tensor with total_batch_loss
+            total_batch_loss = sentiment_disc_train_step(step, batch_index)
+
+            loss_val = total_batch_loss.data[0]
+            epoch_loss += loss_val
+                        
+            if step % 50 == 0:
+                
+                print('\n')
+                print ('------------------------')
+                print ('Epoch: %d Batch_Index: %d' % (epoch, batch_index))
+                print ('Total Training Steps: %d' % step)
+                print ('Batch Loss: %f' % loss_val)
+
+            step += 1
+
+        
+        start_index = (start_index+args.batch_size)%num_line
+        cross_entropy, kld, coef = initial_train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
+        
+    
+    # Get codewords for the generator dataset
+    # Do VAE training with the calculated codeword
+    # Pass the generated the sentence softmax output to discriminator and backprop the gradient to update the generator weights
+    
+
+def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda):
+
+    """
+    Trains the discriminator using both the labeled data and unlabedled data (from the generator). This semi-supervised 
+    setting involving generator data allows training of both the generator and the discriminator in an wake-sleep 
+    fashion. This function is used in the sleep phase.
+
+    Parameters:
+    * cgn_model: A cgn_model with pretrained generator and encoder weights. (See main() flags).
+    * data_handler: data_handler instance that manages all the data and batch preparation
+    * num_epochs: The number of epochs for which the discriminator is trained in this sleep phase
+    * use_cuda: cuda flag
+    """
+
+    # Make sure that generator gradient is off!
     print 'Train Sentiment Discriminator'
+
+    # generated_probabilities, seed_c = cgn_model.sample_generator_for_learning(data_handler, config, use_cuda)
+    # print type(generated_probabilities), generated_probabilities.size(), type(seed_c), seed_c.size()
+    
+    # Initialize discriminator if needed
+    # cgn_model.initialize_discriminator()
     
     sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler, use_cuda)
-    # validate_step ?
-
+    
     step = 0
     num_train_batches = data_handler.num_train_sentiment_batches
 
@@ -44,8 +124,7 @@ def train_sentiment_discriminator(cgn_model, data_handler, num_epochs, use_cuda)
 
             loss_val = total_batch_loss.data[0]
             epoch_loss += loss_val
-            
-            
+                        
             if step % 50 == 0:
                 
                 print('\n')
@@ -147,7 +226,7 @@ def main():
                 print ('Iteration: %d'%iteration)
                 print ('Cross entropy: %f'%ce_loss_val)
                 print ('KLD: %f'%kld_loss_val)
-                print ('KLD Coef: %f'%coef)
+                print ('KLD Coef: %f' % coef)
                 print ('Total Loss: %f'%(ce_loss_val+kld_loss_val))
 
         t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'initial_rvae'))
@@ -160,13 +239,10 @@ def main():
         cgn_model.sample(data_handler, config, args.use_cuda)
 
     else:
+        cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
+        # data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+        # train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
+        train_encoder_decoder_wake_phase(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
         
-        # Discriminator Training Data
-        data_handler.load_discriminator(args.sentiment_discriminator_train_file)    
-        train_sentiment_discriminator(cgn_model, data_handler, args.discriminator_epochs, args.use_cuda)
-        
-    sys.exit(0)
-    
-    
 if __name__ == '__main__':
     main()
