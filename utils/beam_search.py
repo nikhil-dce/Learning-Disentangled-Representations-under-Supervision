@@ -74,7 +74,7 @@ class Beam(object):
         
         # Sum the previous scores.
         if len(self.prevKs) > 0:
-            beam_lk = workd_lk * self.scores.unsqueeze(1).expand_as(workd_lk)
+            beam_lk = workd_lk + self.scores.unsqueeze(1).expand_as(workd_lk)
         else:
             beam_lk = workd_lk[0]
 

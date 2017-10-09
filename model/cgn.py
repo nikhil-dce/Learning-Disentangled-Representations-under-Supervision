@@ -27,6 +27,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
         self.config = config
         self.embedding = Embedding(self.config, embedding_path)
+        self.embedding_param_autograd = [1 if param.requires_grad else 0 for param in self.embedding.parameters()]
         
         self.encoder = Encoder(self.config)
         self.encoder_param_autograd = [1 if param.requires_grad else 0 for param in self.encoder.parameters()]
@@ -35,11 +36,12 @@ class Controlled_Generation_Sentence(nn.Module):
         self.e2logvar = nn.Linear(self.config.encoder_rnn_size*2, self.config.latent_variable_size)
 
         self.generator = Generator(self.config)
+        self.generator_param_autograd = [1 if param.requires_grad else 0 for param in self.generator.parameters()]
 
         self.sentiment_discriminator = Sentiment_CNN(self.config)
         self.sentiment_discriminator_autograd = [1 if param.requires_grad else 0 for param in self.sentiment_discriminator.parameters()]
 
-    def train_initial_rvae(self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
+    def train_rvae (self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
 
         use_cuda = self.embedding.word_embed.weight.is_cuda
         
@@ -74,7 +76,7 @@ class Controlled_Generation_Sentence(nn.Module):
         generator_input = self.embedding.word_embed(generator_word_input)
         out, final_state = self.generator(generator_input, input_code, drop_prob, None)
 
-        return out, final_state, kld, mu, std
+        return out, final_state, kld, mu, std, z.data
 
     def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator, batch_size):
 
@@ -97,7 +99,6 @@ class Controlled_Generation_Sentence(nn.Module):
                         
             logit = self.sentiment_discriminator(sentence_hot_input)
 
-            # equivalent to loss = F.cross_entropy(logit, target)
             softmax = F.softmax(logit)
             
             # bernoulli here with softmax[:,1]
@@ -159,6 +160,69 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return train
 
+    def train_encoder_generator(self, data_handler):
+
+        self.encoder_mode(train_mode=True)
+        self.generator_mode(train_mode=True)
+        
+        # Two optimizers
+        encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
+        generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
+
+        def train(step, batch_index, batch_size, use_cuda, dropout):
+
+            # Turn the encoder training back on
+            self.encoder_mode(train_mode=True)
+            encoder_optimizer.zero_grad()
+            generator_optimizer.zero_grad()
+            
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
+            input = [Variable(t.from_numpy(var)) for var in input]
+            input = [var.long() for var in input]
+            input = [var.cuda() if use_cuda else var for var in input]
+
+            [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
+
+            # fix the encoder, embedding, e2mu, e2logvar
+            logits, _, kld,_ ,_, z = self.train_rvae(dropout,
+                                  encoder_word_input, encoder_character_input,
+                                  decoder_word_input)
+
+                        
+            logits = logits.view(-1, self.config.word_vocab_size)
+            target = target.view(-1)
+            
+            # cross_entropy = F.cross_entropy(logits, target)
+
+            log_softmax = F.log_softmax(logits)
+            print 'Log Softmax ' + str(log_softmax.size()) + ' Target: ' + str(target.size())
+            
+            total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
+            cross_entropy = total_batch_loss / data_handler.batch_size
+
+            vae_loss = 79 * cross_entropy + kld_coef(step) * kld
+
+            vae_loss.backward(retain_variables=True)
+
+            #-------------VAE Loss Backpropagated-----------
+            # Both Encoder.grad and Generator.grad should be set wrt vae_loss
+            
+            # Disable Encoder Training. Encoder.grad is still set.
+            self.encoder_mode(train_mode=False)
+
+            # use this for z and z reconstruction loss
+            softmax_output = t.exp(log_softmax)
+
+            print sotmax_output.size()
+
+            
+            encoder_optimizer.step()
+            generator_optimizer.step()
+            
+            return cross_entropy, kld, kld_coeff(1)
+
+        return train
+    
     def initial_rvae_trainer(self, data_handler):
         
         optimizer = Adam(self.learnable_parameters(), self.config.learning_rate)
@@ -171,7 +235,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
             [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
 
-            logits, _, kld,_ ,_ = self.train_initial_rvae(dropout,
+            logits, _, kld,_ ,_ ,_ = self.train_rvae(dropout,
                                   encoder_word_input, encoder_character_input,
                                   decoder_word_input)
 
@@ -189,11 +253,59 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return train
 
-    def encoder_params(self, auto_grad):
+    def encoder_params(self):
 
-        if auto_grad is None:
-            sys.exit()
+        enc_params = [p for p in self.encoder.parameters() if p.requires_grad]
+        enc_params.extend([p for p in self.embedding.parameters() if p.requires_grad])
+        enc_params.extend([p for p in self.e2mu.parameters() if p.requires_grad])
+        enc_params.extend([p for p in self.e2logvar.parameters() if p.requires_grad])
 
+        return enc_params
+    
+    def generator_params(self):
+        return [p for p in self.generator.parameters() if p.requires_grad]
+
+    def encoder_mode(self, train_mode=False):
+
+        """
+        Store the encoder gradient only if train_mode=True
+        Uses less memory when training the generator 
+        """
+        
+        print 'Encoder Train Mode: %d' % train_mode
+
+        for i, param in enumerate(self.encoder.parameters()):
+
+            if train_mode:
+                if self.encoder_param_autograd[i]:
+                    param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        for i, param in enumerate(self.embedding.parameters()):
+
+            if train_mode:
+                if self.embedding_param_autograd[i]:
+                    param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        for i, param in enumerate(self.e2mu.parameters()):
+
+            if train_mode:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        
+        for i, param in enumerate(self.e2logvar.parameters()):
+
+            if train_mode:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        
+        
     def discriminator_mode(self, train_mode=True):
 
         print 'Discriminator Train: %d' % train_mode
@@ -204,6 +316,19 @@ class Controlled_Generation_Sentence(nn.Module):
                     param.requires_grad = True
             else:
                 param.requires_grad = False
+
+    def generator_mode(self, train_mode=True):
+
+        print 'Generator Train Mode: %d' % train_mode
+
+        for i, param in enumerate(self.generator.parameters()):
+            
+            if train_mode:
+                if self.generator_param_autograd[i]:
+                    param.requires_grad = True
+            else:
+                param.requires_grad = False
+
                 
     def sentiment_discriminator_parameters(self):
         return [p for p in self.sentiment_discriminator.parameters() if p.requires_grad]
@@ -250,7 +375,7 @@ class Controlled_Generation_Sentence(nn.Module):
             dec_out = trg_h.squeeze(1)
             # dec_out.size() => (beam_size*batch_size, generator_rnn_size)
             
-            out = F.softmax(self.generator.fc(dec_out)).unsqueeze(0)
+            out = F.log_softmax(self.generator.fc(dec_out)).unsqueeze(0)
             # out.size() => (1, beam_size*batch_size, vocab_size)
                         
             word_lk = out.view(

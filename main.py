@@ -22,16 +22,24 @@ Create separate training params for generator and discriminator and then average
 This should help analyze the training progress 
 """
 
-def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs, use_cuda):
+def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs, use_cuda, dropout):
     """
     Trains encoder-generator while keeping the discriminator fixed using the following loss functions:
     - encoder using Loss = VAE Loss = KLD + Cross Entropy Loss
     - generator using Loss = VAE Loss + disc_coeff*Discriminator Cross Entropy Using generated sentence softmax + encoder_coeff*Encoder L2 Loss  
     """
 
-    cgn_model.discriminator_mode(train_mode=False)
     # First fix the discriminator. Switch of the gradients by setting autograd to False
+    # Get codewords for the generator dataset. This will take time if VAE train-set is large.
+    # Do VAE training with the calculated codeword. Store the z generated.
+    # Pass the generated sentence softmax output to discriminator and backprop the gradient to update the generator weights
+    # Pass the generated sentence softmax output back to encoder and use L2 loss for z 
 
+    cgn_model.discriminator_mode(train_mode=False)
+
+    #-------------------Get codewords from the current state of discriminator-------- 
+
+    """
     pass_gradient_to_generator = False
     batch_size = 500
     discriminator_forward = cgn_model.discriminator_forward_function (data_handler, use_cuda, pass_gradient_to_generator, batch_size)
@@ -49,16 +57,32 @@ def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs
             print 'Batch: %d' % batch_index
 
     print len(c)
-    sys.exit(0)
-    
-    print 'Begin Step 1. Initial VAE Training. Num Batches: ' + str(num_batches)
+    """
 
-    for epoch in range(start_iteration, num_epochs):
+    #----------------------Now Train Generator--------------------------
+
+    # Use a smaller batch_size
+    num_line = data_handler.gen_batch_loader.num_lines[0]
+    num_line = num_line - num_line % data_handler.batch_size
+    num_batches = num_line / data_handler.batch_size
+
+    train_enc_gen = cgn_model.train_encoder_generator(data_handler)
+    
+    pass_gradient_to_generator = True
+
+    step = 0
+    for epoch in range(0, num_epochs):
 
         epoch_loss = 0
 
         for batch_index in range(num_batches):
 
+            iteration = epoch*num_batches + batch_index
+            cross_entropy, kld, coef = train_enc_gen(step, batch_index,
+                                                     data_handler.batch_size,
+                                                     use_cuda, dropout)
+                                                     
+            sys.exit(0)
             # returns tensor with total_batch_loss
             total_batch_loss = sentiment_disc_train_step(step, batch_index)
 
@@ -74,16 +98,6 @@ def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs
                 print ('Batch Loss: %f' % loss_val)
 
             step += 1
-
-        
-        start_index = (start_index+args.batch_size)%num_line
-        cross_entropy, kld, coef = initial_train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
-        
-    
-    # Get codewords for the generator dataset
-    # Do VAE training with the calculated codeword
-    # Pass the generated the sentence softmax output to discriminator and backprop the gradient to update the generator weights
-    
 
 def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda):
 
@@ -242,7 +256,7 @@ def main():
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
         # data_handler.load_discriminator(args.sentiment_discriminator_train_file)
         # train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
-        train_encoder_decoder_wake_phase(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
+        train_encoder_decoder_wake_phase(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda, args.dropout)
         
 if __name__ == '__main__':
     main()
