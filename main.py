@@ -14,6 +14,9 @@ from utils.config import Config
 
 from model.cgn import Controlled_Generation_Sentence
 
+import torchvision
+from tensorboardX import SummaryWriter
+
 ROOT_DIR = '/data1/nikhil/sentence-corpus/'
 
 """
@@ -211,6 +214,8 @@ def main():
     if args.use_cuda:
         cgn_model = cgn_model.cuda()
 
+    summary_writer = SummaryWriter(ROOT_DIR+'snapshot/run_initial/')
+    
     if train_initial_rvae:
 
         start_iteration = 0
@@ -229,11 +234,12 @@ def main():
         for iteration in range(start_iteration, args.rvae_initial_iterations):
 
             start_index = (start_index+args.batch_size)%num_line
-            cross_entropy, kld, coef = initial_train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
+            cross_entropy, kld, coef, total_loss = initial_train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
 
             if iteration % 50 == 0:
-                ce_loss_val = cross_entropy.data.cpu().numpy()[0]
-                kld_loss_val = kld.data.cpu().numpy()[0]
+                ce_loss_val = cross_entropy.data.cpu()[0]
+                kld_loss_val = kld.data.cpu()[0]
+                total_loss_val = total_loss.data.cpu()[0]
 
                 print('\n')
                 print ('------------------------')
@@ -241,8 +247,13 @@ def main():
                 print ('Cross entropy: %f'%ce_loss_val)
                 print ('KLD: %f'%kld_loss_val)
                 print ('KLD Coef: %f' % coef)
-                print ('Total Loss: %f'%(ce_loss_val+kld_loss_val))
-
+                print ('Total Loss: %f'%(total_loss_val))
+                
+                summary_writer.add_scalar('train_initial_rvae/kld_coef', coef, iteration)
+                summary_writer.add_scalar('train_initial_rvae/kld', kld_loss_val, iteration)
+                summary_writer.add_scalar('train_initial_rvae/cross_entropy', ce_loss_val, iteration)                
+                summary_writer.add_scalar('train_initial_rvae/total_loss', (total_loss_val), iteration)
+                
         t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'initial_rvae'))
 
     elif (args.sample_generator) :
@@ -254,9 +265,13 @@ def main():
 
     else:
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
-        # data_handler.load_discriminator(args.sentiment_discriminator_train_file)
-        # train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
+        #data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+        #train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
         train_encoder_decoder_wake_phase(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda, args.dropout)
-        
+
+    summary_writer.export_scalars_to_json("./all_scalars.json")
+    summary_writer.close()
+
+    
 if __name__ == '__main__':
     main()

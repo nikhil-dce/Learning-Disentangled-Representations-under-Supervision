@@ -213,13 +213,17 @@ class BatchLoader:
     '''
     def load_preprocessed(self, data, idx_files, is_sentence = False):
 
+        
         # Following Data from training txt file
         # Data words for each line
         if not is_sentence:
             data_words = [[line.split() for line in target.split('\n')] for target in data]
         else: # Sentences already in array. No need for split ('\n')
             data_words = [[line.split() for line in target] for target in data]
-            # Max sequence length
+            
+        print 'Dataset Size: %d' % len(data[0])
+
+        # Max sequence length
         self.max_seq_len = np.amax([len(line) for target in data_words for line in target])
         # Num lines in data array
         self.num_lines = [len(target) for target in data_words]

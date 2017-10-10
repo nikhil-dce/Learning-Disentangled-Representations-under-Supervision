@@ -14,18 +14,8 @@ class Sentiment_CNN(nn.Module):
         super(Sentiment_CNN, self).__init__()
         self.config = config
 
-        # Vocab size
-        # this should not be used here
-        # Move this to data_handler
-        # V = config.word_vocab_size
-
-        # Embedding Dimension
-        # Not to be used. Pass the one-hots
-        # D = config.word_embed_size
-
-        # Changed to Dimension to vocab size.
-        # Not using embedding since we have to backprop to generator 
-        D = config.word_vocab_size
+        # D = config.word_vocab_size
+        D = config.word_embed_size
         print 'Embedding Dimension: ' + str(D)
         
         # Number of classes Positive/Negative
@@ -70,10 +60,8 @@ class Sentiment_CNN(nn.Module):
     def forward(self, x):
 
         """
-        x = self.embed(x) # (N,W,D)
+        x should be (batch_size, seq_len, D)
         """
-
-        # Fix the embedding? Calculate gradient for x
 
         x = x.unsqueeze(1) # (N,Ci,W,D)
 

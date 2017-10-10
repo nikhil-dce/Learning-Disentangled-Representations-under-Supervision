@@ -129,21 +129,26 @@ class Controlled_Generation_Sentence(nn.Module):
             # These should be torch tensors as one-hot vectors (discriminator dataset) or softmax outputs (Generated sentences)
             # expected dimenstion is (batch_size, seq_len, vocab_size)
             batch_train_X, batch_train_Y = data_handler.get_sentiment_train_batch(batch_index)
+
+            batch_size = batch_train_X.size(0)
+            batch_train_X = batch_train_X.view(-1, data_handler.gen_batch_loader.words_vocab_size)
+            
             # Torch tensors
             if use_cuda:
                 batch_train_X = batch_train_X.cuda()
                 batch_train_Y = batch_train_Y.cuda()
-
-            batch_train_Y = Variable(batch_train_Y)
+            
+            batch_train_X = t.mm(batch_train_X, self.embedding.word_embed.weight.data)
+            batch_train_X = batch_train_X.view(batch_size, -1, self.embedding.word_embed.weight.size(1))
                         
-            # Check if batch_train_X and batch_train_Y are autograd variables
-            # make them cuda if needed
-
-            # check if the autograd needs to True. Should be true when training generator
+            batch_train_Y = Variable(batch_train_Y)
             batch_train_X = Variable(batch_train_X)
             
+            # Check if batch_train_X and batch_train_Y are autograd variables
+            # make them cuda if needed
+            # check if the autograd needs to True. Should be true when training generator
+            
             optimizer.zero_grad()
-
             logit = self.sentiment_discriminator(batch_train_X)
 
             # equivalent to loss = F.cross_entropy(logit, target)
@@ -183,12 +188,15 @@ class Controlled_Generation_Sentence(nn.Module):
 
             [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
 
+            print target.size()
+            print target[0]
+            
             # fix the encoder, embedding, e2mu, e2logvar
             logits, _, kld,_ ,_, z = self.train_rvae(dropout,
                                   encoder_word_input, encoder_character_input,
                                   decoder_word_input)
 
-                        
+            print logits.size()
             logits = logits.view(-1, self.config.word_vocab_size)
             target = target.view(-1)
             
@@ -200,7 +208,8 @@ class Controlled_Generation_Sentence(nn.Module):
             total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
             cross_entropy = total_batch_loss / data_handler.batch_size
 
-            vae_loss = 79 * cross_entropy + kld_coef(step) * kld
+            vae_loss = 79 * cross_entropy +  kld # kld_coef = 1
+            # this 79 coeff is not needed. TODO: Remove it
 
             vae_loss.backward(retain_variables=True)
 
@@ -212,14 +221,26 @@ class Controlled_Generation_Sentence(nn.Module):
 
             # use this for z and z reconstruction loss
             softmax_output = t.exp(log_softmax)
-
-            print sotmax_output.size()
-
+            #softmax_output = softmax_output.view(batch_size, -1, self.config.word_vocab_size)
+            print softmax_output.size()
+            print type(self.embedding.word_embed.weight), self.embedding.word_embed.weight.size()
             
+            out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight.data)
+            print out_embedding.size()
+
+            out_embedding = out_embedding.view(batch_size, -1)
+            
+            #sen1 = softmax_output[0]
+            #_, indices = sen1.max(1)
+
+            #print indices
+            #print indices.size()
+            #print softmax_output.size()
+
             encoder_optimizer.step()
             generator_optimizer.step()
             
-            return cross_entropy, kld, kld_coeff(1)
+            return cross_entropy, kld, 1
 
         return train
     
@@ -249,7 +270,7 @@ class Controlled_Generation_Sentence(nn.Module):
             loss.backward()
             optimizer.step()
 
-            return cross_entropy, kld, kld_coef(i)
+            return cross_entropy, kld, kld_coef(i), loss
 
         return train
 
