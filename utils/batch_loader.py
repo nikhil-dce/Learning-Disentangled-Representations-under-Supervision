@@ -26,7 +26,7 @@ class BatchLoader:
                     i.e. word representation and character-aware representation
 
                 blind_symbol - special symbol to fill spaces in every word in character-aware representation
-                    to make all words be the same lenght
+                    to make all words be the same length
                 pad_token - the same special symbol as blind_symbol, but in case of lines of words
                 go_token - start of sequence symbol
                 end_token - end of sequence symbol
@@ -83,7 +83,6 @@ class BatchLoader:
         self.go_token = '>'
         self.end_token = '|'
         self.a_token = '?'
-
                 
         idx_exists = fold(f_and,
                           [os.path.exists(file) for file in idx_files],
@@ -206,7 +205,6 @@ class BatchLoader:
         self.create_tensors(data_words)
         self.just_words = [word for line in self.word_tensor[0] for word in line]
 
-        
     '''
     Requires data preprocessed data in the form of sentences 
     separated by '\n'

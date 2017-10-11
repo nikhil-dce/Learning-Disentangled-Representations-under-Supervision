@@ -41,13 +41,12 @@ class Controlled_Generation_Sentence(nn.Module):
         self.sentiment_discriminator = Sentiment_CNN(self.config)
         self.sentiment_discriminator_autograd = [1 if param.requires_grad else 0 for param in self.sentiment_discriminator.parameters()]
 
-    def train_rvae (self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
 
-        use_cuda = self.embedding.word_embed.weight.is_cuda
-        
-        [batch_size, _] = encoder_word_input.size()
-        encoder_input = self.embedding(encoder_word_input, encoder_char_input)
-
+    def encode_for_z (self, encoder_input, batch_size, use_cuda):
+        """
+        Given encoder_input computes the z
+        This is the encoding step.
+        """
         context, h_0, c_0 = self.encoder(encoder_input, None)
         State = (h_0, c_0)
 
@@ -60,9 +59,25 @@ class Controlled_Generation_Sentence(nn.Module):
 
         if use_cuda:
             z = z.cuda()
-            
+
         z = z * std + mu
+
+        return z, std, logvar, mu
+    
+    def train_rvae (self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
+
+        """
+        VAE Train step with random c codeword draw from bernoulli
+        """
         
+        use_cuda = self.embedding.word_embed.weight.is_cuda
+        
+        [batch_size, _] = encoder_word_input.size()
+        encoder_input = self.embedding(encoder_word_input, encoder_char_input)
+
+        z, std, logvar, mu = self.encode_for_z(encoder_input, batch_size, use_cuda)
+
+        # use random codewor
         init_prob = t.ones(batch_size, 1)*0.5
         c = Variable(t.bernoulli(init_prob), requires_grad=False)
 
@@ -76,49 +91,60 @@ class Controlled_Generation_Sentence(nn.Module):
         generator_input = self.embedding.word_embed(generator_word_input)
         out, final_state = self.generator(generator_input, input_code, drop_prob, None)
 
-        return out, final_state, kld, mu, std, z.data
+        return out, final_state, kld, mu, std, z
 
     def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator, batch_size):
 
-        # batch_size here can be increased for faster forward propagation
-
+        """
+        discriminator forward function
+        """
+        
         self.sentiment_discriminator.set_pass_gradient_to_generator(pass_gradient_to_generator)
         self.sentiment_discriminator.eval()
         
         def discriminator_forward(batch_index):
+
+            """
+            This function is used at the start of generator-encoder-discriminator training interation. 
+            The returned codeword can be used as the target value when doing generator
+            training.
+            """
             
             input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
-            [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
+            [encoder_word_input, encoder_character_input, decoder_word_input, _, target] = input
 
             encoder_word_input = t.from_numpy(encoder_word_input)
-            sentence_hot_input = data_handler.feature_from_indices(encoder_word_input)
-            sentence_hot_input = Variable(sentence_hot_input)
-            
+            print encoder_word_input.size()
+            encoder_word_input = Variable(encoder_word_input)
+
             if use_cuda:
-                sentence_hot_input = sentence_hot_input.cuda()
-                        
-            logit = self.sentiment_discriminator(sentence_hot_input)
+                encoder_word_input = encoder_word_input.cuda()
+
+            encoder_word_input = self.embedding.get_word_embed(encoder_word_input)
+            
+            # sentence_hot_input = data_handler.feature_from_indices(encoder_word_input)
+            # sentence_hot_input = Variable(sentence_hot_input)
+                                                
+            logit = self.sentiment_discriminator(encoder_word_input)
 
             softmax = F.softmax(logit)
             
             # bernoulli here with softmax[:,1]
             c = t.bernoulli(softmax[:, 1])
                         
-            return c.data
+            return c
             
         return discriminator_forward
         
     def discriminator_sentiment_trainer (self, data_handler, use_cuda):
 
+        # Switch off the requires_grad flag for generator and encoder 
+        self.encoder_mode(train_mode=False)
+        self.generator_mode(train_mode=False)
+
         # Set train mode. Do not pass gradient to the generator
         self.sentiment_discriminator.train()
-
-        # print self.sentiment_discriminator.state_dict()
-        # for name, param in self.named_parameters():
-            # print name + ' ' + str(param.requires_grad)
-        
-        #self.encoder_params(auto_grad=False)
-        #self.generator_params(auto_grad=False)
+        self.discriminator_mode(train_mode=True)
         
         # get the relevant model parameters
         optimizer = t.optim.Adam(self.sentiment_discriminator_parameters(), self.config.learning_rate)
@@ -137,7 +163,7 @@ class Controlled_Generation_Sentence(nn.Module):
             if use_cuda:
                 batch_train_X = batch_train_X.cuda()
                 batch_train_Y = batch_train_Y.cuda()
-            
+                        
             batch_train_X = t.mm(batch_train_X, self.embedding.word_embed.weight.data)
             batch_train_X = batch_train_X.view(batch_size, -1, self.embedding.word_embed.weight.size(1))
                         
@@ -167,6 +193,11 @@ class Controlled_Generation_Sentence(nn.Module):
 
     def train_encoder_generator(self, data_handler):
 
+        # Train Mode off for discriminator
+        self.discriminator_mode(train_mode=False)
+        self.sentiment_discriminator.eval()
+        
+        # Train Mode on for encoder and generator
         self.encoder_mode(train_mode=True)
         self.generator_mode(train_mode=True)
         
@@ -174,71 +205,106 @@ class Controlled_Generation_Sentence(nn.Module):
         encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
         generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
 
-        def train(step, batch_index, batch_size, use_cuda, dropout):
-
-            # Turn the encoder training back on
-            self.encoder_mode(train_mode=True)
+        def train(step, batch_index, batch_size, use_cuda, dropout, c_target):
+            
             encoder_optimizer.zero_grad()
             generator_optimizer.zero_grad()
+
+            indexes = np.array(range(batch_index, batch_index+batch_size))
+            c_target = c_target[batch_index:batch_index+batch_size]
             
             input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
             input = [Variable(t.from_numpy(var)) for var in input]
             input = [var.long() for var in input]
             input = [var.cuda() if use_cuda else var for var in input]
 
-            [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
-
-            print target.size()
-            print target[0]
+            [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
             
-            # fix the encoder, embedding, e2mu, e2logvar
-            logits, _, kld,_ ,_, z = self.train_rvae(dropout,
-                                  encoder_word_input, encoder_character_input,
-                                  decoder_word_input)
+            #--------------
+        
+            [batch_size, _] = encoder_word_input.size()
+            encoder_input = self.embedding(encoder_word_input, encoder_character_input)
 
-            print logits.size()
+            z_out, std, logvar, mu = self.encode_for_z(encoder_input, batch_size, use_cuda)
+
+            # Detach the z from the exising graph
+            z = Variable(z_out.data, requires_grad=True)
+            
+            c = Variable(c_target.data, requires_grad=False)
+            if use_cuda:
+                c = c.cuda()
+        
+            kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
+
+            c = c.view(c.size(0), 1)
+            print z.size(), c.size()
+
+            input_code = t.cat((z,c), 1)
+            generator_input = self.embedding.word_embed(gen_word_input)
+            logits, _ = self.generator(generator_input, input_code, dropout, None)
+            
+            # --------------
+            
             logits = logits.view(-1, self.config.word_vocab_size)
             target = target.view(-1)
             
             # cross_entropy = F.cross_entropy(logits, target)
-
             log_softmax = F.log_softmax(logits)
-            print 'Log Softmax ' + str(log_softmax.size()) + ' Target: ' + str(target.size())
-            
             total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
-            cross_entropy = total_batch_loss / data_handler.batch_size
-
-            vae_loss = 79 * cross_entropy +  kld # kld_coef = 1
-            # this 79 coeff is not needed. TODO: Remove it
-
+            cross_entropy = total_batch_loss / batch_size
+            
+            vae_loss = cross_entropy +  kld # kld_coef = 1
+            
             vae_loss.backward(retain_variables=True)
 
+            encoder_grad_z_out = z.grad.data
+            # we can backprop encoder_grad_z_out from z_out to get encoder.grad
+            
             #-------------VAE Loss Backpropagated-----------
-            # Both Encoder.grad and Generator.grad should be set wrt vae_loss
-            
-            # Disable Encoder Training. Encoder.grad is still set.
-            self.encoder_mode(train_mode=False)
-
-            # use this for z and z reconstruction loss
+                        
+            # use this for z and z_reconstruction loss
             softmax_output = t.exp(log_softmax)
-            #softmax_output = softmax_output.view(batch_size, -1, self.config.word_vocab_size)
-            print softmax_output.size()
-            print type(self.embedding.word_embed.weight), self.embedding.word_embed.weight.size()
             
-            out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight.data)
+            # both are vairables here
+            out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight)
+            out_embedding = out_embedding.view(batch_size, -1, out_embedding.size(1))[:,:-1,:]
+
             print out_embedding.size()
+            # use this out_embedding for forward pass to get z loss
+            # use this out_mebedding for forward pass to get cross_entropy for c
 
-            out_embedding = out_embedding.view(batch_size, -1)
+            # Generator loss using discriminator
+            c_reconstructed = self.sentiment_discriminator(out_embedding)
             
-            #sen1 = softmax_output[0]
-            #_, indices = sen1.max(1)
+            print c_reconstructed.size(), c_target.size()
+            c_target = c_target.long()
+            c_loss = F.cross_entropy(c_reconstructed, c_target)
 
-            #print indices
-            #print indices.size()
-            #print softmax_output.size()
+            # Generator loss using encoder
+            encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
+            print encoder_character_embedding.size()
+            
+            encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
+            print encoder_reconstructed_input.size()
 
-            encoder_optimizer.step()
+            z_reconstructed, _, _, _ = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)            
+            l2_loss= z-z_reconstructed
+            print l2_loss.size()
+            
+            l2_loss = l2_loss*l2_loss
+            l2_loss = t.sum(l2_loss, dim=1)
+
+            z_loss = t.sum(t.sqrt(l2_loss))/batch_size
+            print z_loss.size(), type(z_loss)
+            print c_loss.size(), type(c_loss)
+
+            tot_loss = z_loss + c_loss
+            tot_loss.backward()
             generator_optimizer.step()
+
+            encoder_optimizer.zero_grad()
+            z_out.backward(encoder_grad_z_out)
+            encoder_optimizer.step()
             
             return cross_entropy, kld, 1
 
@@ -254,7 +320,7 @@ class Controlled_Generation_Sentence(nn.Module):
             input = [var.long() for var in input]
             input = [var.cuda() if use_cuda else var for var in input]
 
-            [encoder_word_input, encoder_character_input, decoder_word_input, decoder_character_input, target] = input
+            [encoder_word_input, encoder_character_input, decoder_word_input,_, target] = input
 
             logits, _, kld,_ ,_ ,_ = self.train_rvae(dropout,
                                   encoder_word_input, encoder_character_input,

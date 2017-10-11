@@ -1,5 +1,6 @@
 __author__ = "Nikhil Mehta"
 __copyright__ = "--"
+#---------------------------
 
 import argparse
 import os
@@ -19,17 +20,11 @@ from tensorboardX import SummaryWriter
 
 ROOT_DIR = '/data1/nikhil/sentence-corpus/'
 
-"""
-TODO
-Create separate training params for generator and discriminator and then average them
-This should help analyze the training progress 
-"""
-
-def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs, use_cuda, dropout):
+def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda, dropout):
     """
     Trains encoder-generator while keeping the discriminator fixed using the following loss functions:
-    - encoder using Loss = VAE Loss = KLD + Cross Entropy Loss
-    - generator using Loss = VAE Loss + disc_coeff*Discriminator Cross Entropy Using generated sentence softmax + encoder_coeff*Encoder L2 Loss  
+    - encoder_loss = VAE Loss = KLD + Cross Entropy Loss
+    - generator_loss = VAE Loss + disc_coeff*disc_cross_entropy + encoder_coeff*Encoder L2 Loss  
     """
 
     # First fix the discriminator. Switch of the gradients by setting autograd to False
@@ -42,7 +37,6 @@ def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs
 
     #-------------------Get codewords from the current state of discriminator-------- 
 
-    """
     pass_gradient_to_generator = False
     batch_size = 500
     discriminator_forward = cgn_model.discriminator_forward_function (data_handler, use_cuda, pass_gradient_to_generator, batch_size)
@@ -50,6 +44,9 @@ def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs
     num_line = (data_handler.gen_batch_loader.num_lines[0])
     num_line = num_line - num_line % batch_size
     num_batches = num_line / batch_size
+
+    # TODO: This only for testing the network training. Select all num_batches
+    num_batches = 2 
 
     print 'Num batches: %d' % num_batches 
     c = []
@@ -59,10 +56,11 @@ def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs
         if batch_index % 50 == 0:
             print 'Batch: %d' % batch_index
 
-    print len(c)
-    """
-
-    #----------------------Now Train Generator--------------------------
+    c = t.stack(c, dim=0)
+    c = c.view(-1)
+    print type(c), c.size()
+    
+    #----------------------Now Train Encoder-Generator--------------------------------
 
     # Use a smaller batch_size
     num_line = data_handler.gen_batch_loader.num_lines[0]
@@ -83,7 +81,8 @@ def train_encoder_decoder_wake_phase(cgn_model, config, data_handler, num_epochs
             iteration = epoch*num_batches + batch_index
             cross_entropy, kld, coef = train_enc_gen(step, batch_index,
                                                      data_handler.batch_size,
-                                                     use_cuda, dropout)
+                                                     use_cuda, dropout,
+                                                     c_target=c)
                                                      
             sys.exit(0)
             # returns tensor with total_batch_loss
@@ -265,9 +264,9 @@ def main():
 
     else:
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
-        #data_handler.load_discriminator(args.sentiment_discriminator_train_file)
-        #train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
-        train_encoder_decoder_wake_phase(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda, args.dropout)
+        # data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+        # train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
+        train_encoder_decoder (cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda, args.dropout)
 
     summary_writer.export_scalars_to_json("./all_scalars.json")
     summary_writer.close()

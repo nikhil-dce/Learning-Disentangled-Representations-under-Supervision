@@ -53,3 +53,22 @@ class Embedding(nn.Module):
         result = t.cat([word_input, character_input], 2)
 
         return result
+
+    def get_word_embed(self, word_input):
+        return self.word_embed(word_input)
+    
+    def get_character_embed(self, character_input):
+        """
+        Parameters:
+        * character_input: [batch_size, seq_len, max_word_len] tensor of long type
+        Returns:
+        * input embedding for the characters 
+        """
+        [batch_size, seq_len, _] = character_input.size()
+        character_input = character_input.view(-1, self.params.max_word_len)
+        character_input = self.char_embed(character_input)
+        character_input = character_input.view(batch_size, seq_len, self.params.max_word_len, self.params.char_embed_size)
+
+        character_input = self.TDNN(character_input)
+
+        return character_input
