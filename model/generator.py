@@ -25,7 +25,8 @@ class Generator(nn.Module):
 
         [beam_batch_size, _, _] = generator_input.size()
         
-        # generator_input = F.dropout(generator_input, drop_prob)
+        generator_input = F.dropout(generator_input, drop_prob) 
+
         zc = zc.unsqueeze(1)
         zc = t.cat([zc] * (beam_batch_size/zc.size(0)), 0)
         zc = zc.contiguous().view(beam_batch_size, 1, -1)

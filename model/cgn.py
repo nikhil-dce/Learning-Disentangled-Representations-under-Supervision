@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.autograd import Variable
 import torch.nn.functional as F
+import math
 
 # Our Encoder and Generator Class
 from .encoder import Encoder
@@ -94,9 +95,17 @@ class Controlled_Generation_Sentence(nn.Module):
         return out, final_state, kld, mu, std, z
 
     def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator, batch_size):
-
         """
-        discriminator forward function
+        Discriminator forward function
+        
+        Parameters:
+        * data_handler: gen_batch_loader from data_handler
+        * use_cuda: cuda flag
+        * pass_gradient_to_generator: pass gradient back to generator
+        * batch_size: batch size for forward prop. This can be higher than generator batch.
+
+        Returns:
+        * Discriminator forward step function
         """
         
         self.sentiment_discriminator.set_pass_gradient_to_generator(pass_gradient_to_generator)
@@ -105,9 +114,12 @@ class Controlled_Generation_Sentence(nn.Module):
         def discriminator_forward(batch_index):
 
             """
-            This function is used at the start of generator-encoder-discriminator training interation. 
+            This function is used at the start of generator-encoder training interation. 
             The returned codeword can be used as the target value when doing generator
             training.
+
+            Parameters:
+            * batch_index: batch index 
             """
             
             input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
@@ -138,56 +150,92 @@ class Controlled_Generation_Sentence(nn.Module):
         
     def discriminator_sentiment_trainer (self, data_handler, use_cuda):
 
+        """
+        Initializes the step function for discriminator training
+        
+        Parameters:
+        * data_handler: data handler for discriminator labeled data
+        * gen_samples: generated samples from current state of the generator
+        * gen_c: codeword used to generate gen_samples
+        * use_cuda: cuda flag
+
+        Returns:
+        * Discriminator Training step function
+        """
+        
         # Switch off the requires_grad flag for generator and encoder 
         self.encoder_mode(train_mode=False)
         self.generator_mode(train_mode=False)
-
-        # Set train mode. Do not pass gradient to the generator
-        self.sentiment_discriminator.train()
         self.discriminator_mode(train_mode=True)
-        
+
+        self.encoder.eval()
+        self.generator.eval()
+        self.sentiment_discriminator.train()
+                
         # get the relevant model parameters
         optimizer = t.optim.Adam(self.sentiment_discriminator_parameters(), self.config.learning_rate)
                
-        def train(i, batch_index):
+        def train(i, generated_samples, generated_c, batch_index):
 
             # This should give samples from both the generator and discriminator dataset
             # These should be torch tensors as one-hot vectors (discriminator dataset) or softmax outputs (Generated sentences)
             # expected dimenstion is (batch_size, seq_len, vocab_size)
+
+            # Get labeled training data from the dataset 
             batch_train_X, batch_train_Y = data_handler.get_sentiment_train_batch(batch_index)
 
-            batch_size = batch_train_X.size(0)
-            batch_train_X = batch_train_X.view(-1, data_handler.gen_batch_loader.words_vocab_size)
+            #--------------
             
+            """
+            # Calculate generator output entropy.
+            # TODO: Make entropy calculation generic for all generated_c.
+            
+            prob_1 = t.sum(generated_c)/generated_c.size(0)
+            
+            entropy = prob_1*t.log(prob_1) + (1-prob_1)*t.log(1-prob_1)
+            entropy = entropy / math.log(2)
+            """
+            
+            batch_train_X.extend(generated_samples)
+            batch_train_X = data_handler.create_sentiment_batch(batch_train_X)
+            batch_train_X = Variable(batch_train_X)
+            
+            batch_train_Y = t.from_numpy(np.array(batch_train_Y))
+            #batch_train_Y = batch_train_Y.view(batch_train_Y.size(0), 1)
+
+            generated_c = generated_c.view(-1)
+            batch_train_Y = batch_train_Y.long()
+            generated_c = generated_c.long()
+            batch_train_Y = t.cat((batch_train_Y, generated_c) ,dim=0)
+            batch_train_Y = Variable(batch_train_Y)
+            
+            #--------------
+
+            batch_size = batch_train_X.size(0)
+                        
             # Torch tensors
             if use_cuda:
                 batch_train_X = batch_train_X.cuda()
                 batch_train_Y = batch_train_Y.cuda()
-                        
-            batch_train_X = t.mm(batch_train_X, self.embedding.word_embed.weight.data)
-            batch_train_X = batch_train_X.view(batch_size, -1, self.embedding.word_embed.weight.size(1))
-                        
-            batch_train_Y = Variable(batch_train_Y)
-            batch_train_X = Variable(batch_train_X)
-            
-            # Check if batch_train_X and batch_train_Y are autograd variables
-            # make them cuda if needed
-            # check if the autograd needs to True. Should be true when training generator
-            
-            optimizer.zero_grad()
+
+            batch_train_X = self.embedding.word_embed(batch_train_X)
             logit = self.sentiment_discriminator(batch_train_X)
 
             # equivalent to loss = F.cross_entropy(logit, target)
             log_softmax = F.log_softmax(logit)
             total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
-            loss = total_batch_loss / data_handler.batch_size
+            cross_entropy = total_batch_loss / data_handler.batch_size
+            softmax = t.exp(log_softmax) 
+            emperical_entropy = t.mean(t.sum(softmax * log_softmax, 1))
 
+            optimizer.zero_grad()
+            loss = cross_entropy + emperical_entropy
             loss.backward()
             optimizer.step()
 
             # return the total_batch_loss
             # can be used to calculate the total epoch loss
-            return total_batch_loss
+            return loss
 
         return train
 
@@ -416,25 +464,37 @@ class Controlled_Generation_Sentence(nn.Module):
             else:
                 param.requires_grad = False
 
-                
-    def sentiment_discriminator_parameters(self):
-        return [p for p in self.sentiment_discriminator.parameters() if p.requires_grad]
-    
-    def learnable_parameters(self):
-        # word_embedding is constant parameter thus it must be dropped from list of parameters for optimizer
-        return [p for p in self.parameters() if p.requires_grad]
-
     def sample_from_generator (self, batch_loader, seq_len, seed,
                                use_cuda, beam_size = 10, n_best = 1, samples=5,
                                learning = False):
+
+        """
+        Samples sentences based on the current state of the generator.
+
+        Parameters:
+        * batch_loader: gen_batch_loader from data_handler.
+        * seq_len: max sequence length
+        * seed: (z+c) latent code, where c is the structured code and z is the random sample
+        * use_cuda: cuda flag
+        * beam_size: number of candidate beams to consider for joint probability
+        * n_best: n best beams per input to return. Should be 1 while training.
+        * samples: number of samples to return. Getting more sample increases memory usage by the order of beam_size
+        * learning: is generator learning. 
+
+        Return:
+        * all_sent_probs: soft distributon, if learning is true 
+        * all_sentences, all_scores: (sentence in words, join probability scores), if learning is false
+        
+        """
+
+        # self.generator in eval?
+
+        self.generator.eval()
         
         seed = Variable(seed)
         if use_cuda:
             seed = seed.cuda()
 
-        # seed = seed.unsqueeze(1)
-        # seed = t.cat([seed] * beam_size, 1)
-        # print seed
         # State see the shape
         dec_states = None
         drop_prob = 0.0
@@ -563,6 +623,7 @@ class Controlled_Generation_Sentence(nn.Module):
         if learning:
             return all_sent_probs
         else :
+            """
             all_sentences = []
             for batch in all_sent_codes:
                 sentences = []
@@ -577,11 +638,26 @@ class Controlled_Generation_Sentence(nn.Module):
                     sentences.append(sentence)
 
                 all_sentences.append(sentences)
-        
-            return all_sentences, allScores 
+            """
+            
+            return all_sent_codes, allScores 
 
     def sample(self, data_handler, config, use_cuda=True, print_sentences = True):
 
+        """
+        This function uses the current state of the generator to sample.
+        
+        Parameters:
+        * data_handler: Data handler to create batch
+        * config: model configuration object
+        * use_cuda: cuda flag
+
+        Returns:
+        * generated_samples: softmax outputs of the generator
+        * seed_c: the corresponding structured codeword
+        """
+
+        
         samp = 10
         seed_z = t.randn([samp, config.latent_variable_size])
         init_prob = t.ones(samp, 1)*0.5
@@ -600,8 +676,18 @@ class Controlled_Generation_Sentence(nn.Module):
                 for word in s:
                     sen += word
                 print sen
+        else:
 
-    def sample_generator_for_learning(self, data_handler, config, use_cuda = True):
+            all_sentences = []
+            for batch in generated_samples:
+                sentence = []
+                for word_n in batch:
+                    sentence.append(word_n[0])
+                all_sentences.append(sentence)
+
+            return all_sentences, seed_c
+
+    def sample_generator_for_learning(self, data_handler, config, use_cuda = True, sample=10):
 
         """
         This function uses the current state of the generator to sample.
@@ -610,24 +696,40 @@ class Controlled_Generation_Sentence(nn.Module):
         * data_handler: Data handler to create batch
         * config: model configuration object
         * use_cuda: cuda flag
+        * sample: number of samples to generate
 
         Returns:
-        * generated_samples: softmax outputs of the generator
+        * all_gen_samples: softmax outputs of the generator
         * seed_c: the corresponding structured codeword
         """
-        sample = 10
         seed_z = t.randn([sample, config.latent_variable_size])
         init_prob = t.ones(sample, 1) * 0.5
         seed_c = t.bernoulli(init_prob)
 
         seed = t.cat((seed_z, seed_c), 1)
 
-        generated_samples = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best=1,  samples=sample, learning=True)
-        generated_samples = data_handler.create_generator_batch(generated_samples, use_cuda)
+        generated_samples, _ = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best=1,  samples=sample, learning=False)
+        
+        all_gen_samples = []
+        for batch in generated_samples:
+            sentence = []
+            for word_n in batch:
+                sentence.append(word_n[0])
+            all_gen_samples.append(sentence)
+
+        """
+        generated_samples = data_handler.create_generator_batch(all_sentences, use_cuda)
 
         if use_cuda:
             seed_c = seed_c.cuda()
-            
-        return generated_samples, seed_c
+            generated_samples = generated_samples.cuda()
+        """
         
+        return all_gen_samples, seed_c
         
+    def sentiment_discriminator_parameters(self):
+        return [p for p in self.sentiment_discriminator.parameters() if p.requires_grad]
+    
+    def learnable_parameters(self):
+        # word_embedding is constant parameter thus it must be dropped from list of parameters for optimizer
+        return [p for p in self.parameters() if p.requires_grad]    

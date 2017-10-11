@@ -60,7 +60,7 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     c = c.view(-1)
     print type(c), c.size()
     
-    #----------------------Now Train Encoder-Generator--------------------------------
+#----------------------Now Train Encoder-Generator--------------------------------
 
     # Use a smaller batch_size
     num_line = data_handler.gen_batch_loader.num_lines[0]
@@ -104,30 +104,32 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
 def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda):
 
     """
-    Trains the discriminator using both the labeled data and unlabedled data (from the generator). This semi-supervised 
-    setting involving generator data allows training of both the generator and the discriminator in an wake-sleep 
-    fashion. This function is used in the sleep phase.
+    Trains the discriminator using both the labeled data and unlabedled data (from the generator). 
 
     Parameters:
     * cgn_model: A cgn_model with pretrained generator and encoder weights. (See main() flags).
     * data_handler: data_handler instance that manages all the data and batch preparation
     * num_epochs: The number of epochs for which the discriminator is trained in this sleep phase
     * use_cuda: cuda flag
+
     """
 
-    # Make sure that generator gradient is off!
     print 'Train Sentiment Discriminator'
 
-    # generated_probabilities, seed_c = cgn_model.sample_generator_for_learning(data_handler, config, use_cuda)
-    # print type(generated_probabilities), generated_probabilities.size(), type(seed_c), seed_c.size()
-    
-    # Initialize discriminator if needed
-    # cgn_model.initialize_discriminator()
-    
+    """
+    generated_samples = data_handler.create_generator_batch(generated_samples, use_cuda)
+    generated_samples = t.stack(generated_samples, dim=0)
+    generated_c = t.stack(generated_c, dim=0)
+    print type(generated_samples), generated_samples.size(), type(generated_c), generated_c.size()
+    """
+        
     sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler, use_cuda)
     
     step = 0
     num_train_batches = data_handler.num_train_sentiment_batches
+
+    number_of_gen_samples = data_handler.batch_size # Number of samples to generate
+    gen_samples_batch_size = 10  # Generate batch_size samples in 1 call. Increasing batch_size here will increase memory consumption proportional to O(beam_size)
 
     for epoch in range(0, num_epochs):
 
@@ -136,9 +138,17 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
         for batch_index in range(num_train_batches):
 
             # returns tensor with total_batch_loss
-            total_batch_loss = sentiment_disc_train_step(step, batch_index)
+            
+            generated_samples, generated_c = [], []
+            for ith_sample in range(number_of_gen_samples/gen_samples_batch_size):
+                gen_sample, gen_c = cgn_model.sample_generator_for_learning(data_handler, config, use_cuda, sample=gen_samples_batch_size)
+                generated_samples.extend(gen_sample)
+                generated_c.extend(gen_c)
 
-            loss_val = total_batch_loss.data[0]
+            generated_c = t.stack(generated_c, dim=0)
+            batch_loss = sentiment_disc_train_step(step, generated_samples, generated_c, batch_index)
+
+            loss_val = batch_loss.data[0]
             epoch_loss += loss_val
                         
             if step % 50 == 0:
@@ -164,7 +174,7 @@ def main():
 
     parser.add_argument('--rvae-initial-iterations', type=int, default=120000)
     parser.add_argument('--discriminator-epochs', type=int, default=1)
-    parser.add_argument('--generator-iterations', type=int, default=1000)
+    parser.add_argument('--generator-epochs', type=int, default=1)
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--use-cuda', type=bool, default=True)
     parser.add_argument('--sample-generator', type=bool, default=False)
@@ -264,9 +274,9 @@ def main():
 
     else:
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
-        # data_handler.load_discriminator(args.sentiment_discriminator_train_file)
-        # train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
-        train_encoder_decoder (cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda, args.dropout)
+        data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+        train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
+        # train_encoder_decoder (cgn_model, config, data_handler, args.generator_epochs, args.use_cuda, args.dropout)
 
     summary_writer.export_scalars_to_json("./all_scalars.json")
     summary_writer.close()

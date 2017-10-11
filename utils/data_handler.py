@@ -11,6 +11,7 @@ from batch_loader import BatchLoader
 from .functional import *
 
 import torch as t
+
 """
 This code expects word_embeddings, word vocab, and char vocab already generated using 
 train_embedding.py
@@ -60,61 +61,65 @@ class DataHandler:
         data_words = [line.split() for line in self.sentiment_discriminator_X]
 
         # This has both train and dev data
-        self.sentiment_discriminator_X = np.array([list(map(self.gen_batch_loader.word_to_idx.get, line)) for line in data_words])
-        self.sentiment_discriminator_Y = np.array(self.sentiment_discriminator_Y)
+        self.sentiment_discriminator_X = [list(map(self.gen_batch_loader.word_to_idx.get, line)) for line in data_words]
+        #self.sentiment_discriminator_Y = self.sentiment_discriminator_Y
 
     def get_sentiment_train_batch(self, batch_index):
 
         batch_indices = np.arange(batch_index*self.batch_size, (batch_index+1)*self.batch_size)
 
-        batch_train_X = self.sentiment_discriminator_X[self.sentiment_train_indices[batch_indices]]
-        batch_train_Y = self.sentiment_discriminator_Y[self.sentiment_train_indices[batch_indices]]
-
-        # get batch sentence len
+        batch_train_X = [self.sentiment_discriminator_X[self.sentiment_train_indices[x]] for x in batch_indices]
+        batch_train_Y = [self.sentiment_discriminator_Y[self.sentiment_train_indices[x]] for x in batch_indices]
         
-        batch_sentence_len = [len(sentence) for sentence in batch_train_X]
-        max_seq_len = np.amax(batch_sentence_len)
-        
-        for i, line in enumerate(batch_train_X):
-            line_len = batch_sentence_len[i]
-            to_add = max_seq_len - line_len
-            batch_train_X[i] = line + [self.gen_batch_loader.word_to_idx[self.gen_batch_loader.pad_token]] * to_add
-
-        batch_train_X = np.array(batch_train_X.tolist())
-        batch_train_X = batch_train_X.reshape((self.batch_size, max_seq_len))
-        batch_train_Y = np.array(batch_train_Y.tolist())
-        
-        batch_train_X = t.from_numpy(batch_train_X)
-        batch_train_Y = t.from_numpy(batch_train_Y)
-        batch_train_X = self.feature_from_indices(batch_train_X)
-
         return batch_train_X, batch_train_Y
 
+    def create_sentiment_batch(self, x_dg):
+
+        # get batch sentence len   
+        batch_sentence_len = [len(sentence) for sentence in x_dg]
+        max_seq_len = np.amax(batch_sentence_len)
+
+        for i, line in enumerate(x_dg):
+            line_len = batch_sentence_len[i]
+            to_add = max_seq_len - line_len
+            x_dg[i] = line + [self.gen_batch_loader.word_to_idx[self.gen_batch_loader.pad_token]] * to_add
+        
+        x_dg = np.array(x_dg)
+        x_dg = x_dg.reshape((len(x_dg), max_seq_len))
+        x_dg = t.from_numpy(x_dg)
+
+        return x_dg
+        
+
+
+
+        
     def create_generator_batch(self, x_gen, use_cuda):
 
         gen_batch_sen_len = [len(sentence) for sentence in x_gen]
 
+        """
         one_hot = t.FloatTensor(self.vocab_size)
         one_hot = one_hot.zero_()
         one_hot[self.gen_batch_loader.word_to_idx[self.gen_batch_loader.pad_token]] = 1
 
         if use_cuda:
             one_hot = one_hot.cuda()
-    
+        """
+        
         max_seq_len = np.amax(gen_batch_sen_len)
 
         for i, line in enumerate(x_gen):
     
             line_len = len(line)
             to_add = max_seq_len - line_len
-            line = line + [one_hot]*to_add
-            line = t.stack(line, dim=0)
+            # line = line + [one_hot]*to_add
+            line  = line + [self.gen_batch_loader.word_to_idx[self.gen_batch_loader.pad_token]] * to_add
+            # line = t.stack(line, dim=0)
             x_gen[i] = line
     
-        print len(x_gen)
-        x_gen = t.stack(x_gen, dim=0)
-        print x_gen.size(), type(x_gen)
-
+        x_gen = t.from_numpy(np.asarray(x_gen))
+        
         return x_gen
 
     # Change this function for tensor stack like above
