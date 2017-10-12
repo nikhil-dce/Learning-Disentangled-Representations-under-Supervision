@@ -226,7 +226,7 @@ class Controlled_Generation_Sentence(nn.Module):
             total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
             cross_entropy = total_batch_loss / data_handler.batch_size
             softmax = t.exp(log_softmax) 
-            emperical_shannon_entropy = t.mean(t.sum(softmax * log_softmax, 1))
+            emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax * log_softmax, 1)))
 
             optimizer.zero_grad()
             loss = cross_entropy + emperical_shannon_entropy
@@ -235,7 +235,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
             # return the total_batch_loss
             # can be used to calculate the total epoch loss
-            return loss, cross_entropy, emperical_shannnon_entropy
+            return loss, cross_entropy, emperical_shannon_entropy
 
         return train
 

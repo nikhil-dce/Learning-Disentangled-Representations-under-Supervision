@@ -56,9 +56,6 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     num_line = num_line - num_line % batch_size
     num_batches = num_line / batch_size
 
-    # TODO: This only for testing the network training. Select all num_batches
-    num_batches = 2 
-
     c = []
     for batch_index in range(num_batches):
         c_batch = discriminator_forward(batch_index)
@@ -98,7 +95,8 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                 
                 print('\n')
                 print ('------------------------')
-                print ('Epoch: %d Batch_Index: %d' % (epoch, batch_index))
+                print ('Encoder-Generator Data')
+                print ('Epoch: %d Batch_Index: %d/%d' % (epoch+1, batch_index, num_batches))
                 print ('Enc-Gen Training Step: %d' % total_steps)
                 print ('Encoder Loss: %f' % vae_loss_val)
                 print ('Generator Loss: %f' % (vae_loss_val+gen_loss_val))
@@ -161,15 +159,16 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
                 
                 print('\n')
                 print ('------------------------')
-                print ('Epoch: %d' % (epoch))
+                print ('Discriminator Training')
+                print ('Epoch: %d Batch: %d/%d' % (epoch+1, batch_index, num_train_batches))
                 print ('Total Training Steps: %d' % total_training_steps)
                 print ('Batch loss: %f' % loss_val)
                 print ('Batch cross Entropy: %f' % ce_loss_val)
                 print ('Batch emperical shannon entropy: %f' % ese_loss_val)  
 
                 summary_writer.add_scalar('train_discriminator/total_loss', loss_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator_rvae/cross_entropy', ce_loss_val, total_training_steps)
-                summary_writer.add_scalar('train_initial_rvae/cross_entropy', ce_loss_val, total_training_steps)
+                summary_writer.add_scalar('train_discriminator/cross_entropy', ce_loss_val, total_training_steps)
+                summary_writer.add_scalar('train_discriminator/cross_entropy', ce_loss_val, total_training_steps)
                                 
             total_training_steps += 1
 
@@ -235,9 +234,11 @@ def main():
     if args.use_cuda:
         cgn_model = cgn_model.cuda()
 
-    summary_writer = SummaryWriter(ROOT_DIR+'snapshot/run_initial/')
-    
+        
     if train_initial_rvae:
+
+        summary_dir = ROOT_DIR+'snapshot/run_initial/'
+        summary_writer = SummaryWriter(summary_dir)
 
         start_iteration = 0
 
@@ -287,6 +288,9 @@ def main():
 
     elif (args.train_cgn_model):
 
+        summary_dir = ROOT_DIR+'snapshot/train_cgn_logs/'
+        summary_writer = SummaryWriter(summary_dir)
+        
         # Load pretrained
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
 
@@ -296,7 +300,7 @@ def main():
         total_discriminator_steps = 0
         total_generator_steps = 0
 
-        for i in args.alternating_iteration:
+        for i in range(args.total_alternating_iterations):
             
             total_discriminator_steps = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs,
                                                                       args.use_cuda, summary_writer, total_discriminator_steps)
@@ -306,13 +310,18 @@ def main():
 
         t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
 
+        summary_writer.export_scalars_to_json(summary_dir+"all_scalars.json")
     else:
-        cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
-        data_handler.load_discriminator(args.sentiment_discriminator_train_file)
-        train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
+
+        summary_writer = SummaryWriter(ROOT_DIR+'snapshot/run_random_logs/')
+
+        
+        # cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
+        # data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+        # train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, args.use_cuda)
         # train_encoder_decoder (cgn_model, config, data_handler, args.generator_epochs, args.use_cuda, args.dropout)
 
-    summary_writer.export_scalars_to_json("./all_scalars.json")
+    
     summary_writer.close()
 
     
