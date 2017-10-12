@@ -20,11 +20,22 @@ from tensorboardX import SummaryWriter
 
 ROOT_DIR = '/data1/nikhil/sentence-corpus/'
 
-def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda, dropout):
+def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda, dropout, summary_writer, total_steps):
     """
     Trains encoder-generator while keeping the discriminator fixed using the following loss functions:
     - encoder_loss = VAE Loss = KLD + Cross Entropy Loss
     - generator_loss = VAE Loss + disc_coeff*disc_cross_entropy + encoder_coeff*Encoder L2 Loss  
+
+    Parameters:
+
+    * cgn_model: controllable generation model instance
+    * config: config instance created in main.py 
+    * data_handler: Manages all data/batch creation 
+    * num_epochs: Train enc-gen for num_epochs
+    * use_cuda: cuda flag
+    * dropout: dropout probability
+    * summary_writer: tensorboard summary writer
+    * total_steps: steps for which enc-gen have already been trained
     """
 
     # First fix the discriminator. Switch of the gradients by setting autograd to False
@@ -48,7 +59,6 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     # TODO: This only for testing the network training. Select all num_batches
     num_batches = 2 
 
-    print 'Num batches: %d' % num_batches 
     c = []
     for batch_index in range(num_batches):
         c_batch = discriminator_forward(batch_index)
@@ -58,9 +68,8 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
 
     c = t.stack(c, dim=0)
     c = c.view(-1)
-    print type(c), c.size()
-    
-#----------------------Now Train Encoder-Generator--------------------------------
+        
+    #----------------------Now Train Encoder-Generator--------------------------------
 
     # Use a smaller batch_size
     num_line = data_handler.gen_batch_loader.num_lines[0]
@@ -71,37 +80,41 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     
     pass_gradient_to_generator = True
 
-    step = 0
     for epoch in range(0, num_epochs):
-
-        epoch_loss = 0
-
         for batch_index in range(num_batches):
 
             iteration = epoch*num_batches + batch_index
-            cross_entropy, kld, coef = train_enc_gen(step, batch_index,
+            vae_loss, cross_entropy, kld, gen_loss = train_enc_gen(batch_index,
                                                      data_handler.batch_size,
                                                      use_cuda, dropout,
                                                      c_target=c)
-                                                     
-            sys.exit(0)
-            # returns tensor with total_batch_loss
-            total_batch_loss = sentiment_disc_train_step(step, batch_index)
 
-            loss_val = total_batch_loss.data[0]
-            epoch_loss += loss_val
+            vae_loss_val = vae_loss.data.cpu()[0]
+            ce_loss_val = cross_entropy.data.cpu()[0]
+            kld_val = kld.data.cpu()[0]
+            gen_loss_val = gen_loss.data.cpu()[0]
                         
-            if step % 50 == 0:
+            if total_steps % 50 == 0:
                 
                 print('\n')
                 print ('------------------------')
                 print ('Epoch: %d Batch_Index: %d' % (epoch, batch_index))
-                print ('Total Training Steps: %d' % step)
-                print ('Batch Loss: %f' % loss_val)
+                print ('Enc-Gen Training Step: %d' % total_steps)
+                print ('Encoder Loss: %f' % vae_loss_val)
+                print ('Generator Loss: %f' % (vae_loss_val+gen_loss_val))
+                print ('Cross Entropy: %f' % ce_loss_val)
+                print ('KLD: %f' % kld_val)
+                
+                summary_writer.add_scalar('train_enc_gen/encoder_loss', vae_loss_val, total_steps)
+                summary_writer.add_scalar('train_enc_gen/generator_loss', (vae_loss_val+gen_loss_val), total_steps)
+                summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
+                summary_writer.add_scalar('train_enc_gen/kld', kld_val, total_steps)
+                
+            total_steps += 1
+            
+    return total_steps
 
-            step += 1
-
-def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda):
+def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda, summary_writer, total_training_steps):
 
     """
     Trains the discriminator using both the labeled data and unlabedled data (from the generator). 
@@ -114,22 +127,14 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
 
     """
 
-    print 'Train Sentiment Discriminator'
-
-    """
-    generated_samples = data_handler.create_generator_batch(generated_samples, use_cuda)
-    generated_samples = t.stack(generated_samples, dim=0)
-    generated_c = t.stack(generated_c, dim=0)
-    print type(generated_samples), generated_samples.size(), type(generated_c), generated_c.size()
-    """
+    print 'Training Sentiment Discriminator. Total Gen-Disc Steps: %d' % total_training_steps     
         
-    sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler, use_cuda)
-    
-    step = 0
     num_train_batches = data_handler.num_train_sentiment_batches
 
     number_of_gen_samples = data_handler.batch_size # Number of samples to generate
     gen_samples_batch_size = 10  # Generate batch_size samples in 1 call. Increasing batch_size here will increase memory consumption proportional to O(beam_size)
+
+    sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler, use_cuda)
 
     for epoch in range(0, num_epochs):
 
@@ -137,8 +142,6 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
 
         for batch_index in range(num_train_batches):
 
-            # returns tensor with total_batch_loss
-            
             generated_samples, generated_c = [], []
             for ith_sample in range(number_of_gen_samples/gen_samples_batch_size):
                 gen_sample, gen_c = cgn_model.sample_generator_for_learning(data_handler, config, use_cuda, sample=gen_samples_batch_size)
@@ -146,35 +149,43 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
                 generated_c.extend(gen_c)
 
             generated_c = t.stack(generated_c, dim=0)
-            batch_loss = sentiment_disc_train_step(step, generated_samples, generated_c, batch_index)
+            batch_loss, batch_cross_entropy, batch_emperical_shannon_entropy = sentiment_disc_train_step(generated_samples, generated_c, batch_index)
 
-            loss_val = batch_loss.data[0]
+            loss_val = batch_loss.data.cpu()[0]
+            ce_loss_val = batch_cross_entropy.data.cpu()[0]
+            ese_loss_val = batch_emperical_shannon_entropy.data.cpu()[0]
+            
             epoch_loss += loss_val
                         
-            if step % 50 == 0:
+            if total_training_steps % 50 == 0:
                 
                 print('\n')
                 print ('------------------------')
-                print ('Epoch: %d Batch_Index: %d' % (epoch, batch_index))
-                print ('Total Training Steps: %d' % step)
-                print ('Batch Loss: %f' % loss_val)
+                print ('Epoch: %d' % (epoch))
+                print ('Total Training Steps: %d' % total_training_steps)
+                print ('Batch loss: %f' % loss_val)
+                print ('Batch cross Entropy: %f' % ce_loss_val)
+                print ('Batch emperical shannon entropy: %f' % ese_loss_val)  
 
-            step += 1
+                summary_writer.add_scalar('train_discriminator/total_loss', loss_val, total_training_steps)
+                summary_writer.add_scalar('train_discriminator_rvae/cross_entropy', ce_loss_val, total_training_steps)
+                summary_writer.add_scalar('train_initial_rvae/cross_entropy', ce_loss_val, total_training_steps)
+                                
+            total_training_steps += 1
 
         epoch += 1
-        print('\n')
-        print ('------------------------')
-        print ('Epoch: %d' % epoch)
-        print ('Total Epoch Loss: %f' % epoch_loss)
 
+    # step helps keep track of generator-discriminator alternating iterations
+    return total_training_steps
 
 def main():
 
     parser = argparse.ArgumentParser(description='Controlled_Generation_Sentence')
 
-    parser.add_argument('--rvae-initial-iterations', type=int, default=120000)
-    parser.add_argument('--discriminator-epochs', type=int, default=1)
-    parser.add_argument('--generator-epochs', type=int, default=1)
+    parser.add_argument('--rvae-initial-iterations', type=int, default=120000, help="initial rvae training steps")
+    parser.add_argument('--discriminator-epochs', type=int, default=1, help="num epochs for which disc is to be trained while alternating")
+    parser.add_argument('--generator-epochs', type=int, default=1, help="num epochs for which gener is to be trained while alternating")
+    parser.add_argument('--total-alternating-iterations', type=int, default=1000, help="number of alternating iterations")
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--use-cuda', type=bool, default=True)
     parser.add_argument('--sample-generator', type=bool, default=False)
@@ -187,7 +198,8 @@ def main():
     parser.add_argument('--words-vocab-path', type=str, default=os.path.join(ROOT_DIR, 'words_vocab.pkl'))
     parser.add_argument('--chars-vocab-path', type=str, default=os.path.join(ROOT_DIR, 'characters_vocab.pkl'))
     parser.add_argument('--sentiment-discriminator-train-file', type=str, default=os.path.join(ROOT_DIR, 'raw_train_sentiment_discriminator.pkl'))
-
+    parser.add_argument('--train-cgn-model', type=bool, default=False)
+    
     args = parser.parse_args()
 
     if not os.path.exists(args.embedding_path):
@@ -228,6 +240,7 @@ def main():
     if train_initial_rvae:
 
         start_iteration = 0
+
         
         initial_train_step = cgn_model.initial_rvae_trainer(data_handler)
         # initial_validate_step ?
@@ -271,6 +284,27 @@ def main():
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
         print 'Initial Model Loaded'
         cgn_model.sample(data_handler, config, args.use_cuda)
+
+    elif (args.train_cgn_model):
+
+        # Load pretrained
+        cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
+
+        # Load discriminator labelled data
+        data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+
+        total_discriminator_steps = 0
+        total_generator_steps = 0
+
+        for i in args.alternating_iteration:
+            
+            total_discriminator_steps = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs,
+                                                                      args.use_cuda, summary_writer, total_discriminator_steps)
+            
+            total_generator_steps = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs,
+                                                          args.use_cuda, args.dropout, summary_writer, total_generator_steps)
+
+        t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
 
     else:
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))

@@ -175,7 +175,7 @@ class Controlled_Generation_Sentence(nn.Module):
         # get the relevant model parameters
         optimizer = t.optim.Adam(self.sentiment_discriminator_parameters(), self.config.learning_rate)
                
-        def train(i, generated_samples, generated_c, batch_index):
+        def train (generated_samples, generated_c, batch_index):
 
             # This should give samples from both the generator and discriminator dataset
             # These should be torch tensors as one-hot vectors (discriminator dataset) or softmax outputs (Generated sentences)
@@ -226,16 +226,16 @@ class Controlled_Generation_Sentence(nn.Module):
             total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
             cross_entropy = total_batch_loss / data_handler.batch_size
             softmax = t.exp(log_softmax) 
-            emperical_entropy = t.mean(t.sum(softmax * log_softmax, 1))
+            emperical_shannon_entropy = t.mean(t.sum(softmax * log_softmax, 1))
 
             optimizer.zero_grad()
-            loss = cross_entropy + emperical_entropy
+            loss = cross_entropy + emperical_shannon_entropy
             loss.backward()
             optimizer.step()
 
             # return the total_batch_loss
             # can be used to calculate the total epoch loss
-            return loss
+            return loss, cross_entropy, emperical_shannnon_entropy
 
         return train
 
@@ -253,7 +253,7 @@ class Controlled_Generation_Sentence(nn.Module):
         encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
         generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
 
-        def train(step, batch_index, batch_size, use_cuda, dropout, c_target):
+        def train(batch_index, batch_size, use_cuda, dropout, c_target):
             
             encoder_optimizer.zero_grad()
             generator_optimizer.zero_grad()
@@ -285,7 +285,6 @@ class Controlled_Generation_Sentence(nn.Module):
             kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
 
             c = c.view(c.size(0), 1)
-            print z.size(), c.size()
 
             input_code = t.cat((z,c), 1)
             generator_input = self.embedding.word_embed(gen_word_input)
@@ -317,35 +316,27 @@ class Controlled_Generation_Sentence(nn.Module):
             out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight)
             out_embedding = out_embedding.view(batch_size, -1, out_embedding.size(1))[:,:-1,:]
 
-            print out_embedding.size()
             # use this out_embedding for forward pass to get z loss
             # use this out_mebedding for forward pass to get cross_entropy for c
 
             # Generator loss using discriminator
             c_reconstructed = self.sentiment_discriminator(out_embedding)
             
-            print c_reconstructed.size(), c_target.size()
             c_target = c_target.long()
             c_loss = F.cross_entropy(c_reconstructed, c_target)
 
             # Generator loss using encoder
             encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
-            print encoder_character_embedding.size()
-            
             encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
-            print encoder_reconstructed_input.size()
-
+            
             z_reconstructed, _, _, _ = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)            
             l2_loss= z-z_reconstructed
-            print l2_loss.size()
-            
+                        
             l2_loss = l2_loss*l2_loss
             l2_loss = t.sum(l2_loss, dim=1)
 
             z_loss = t.sum(t.sqrt(l2_loss))/batch_size
-            print z_loss.size(), type(z_loss)
-            print c_loss.size(), type(c_loss)
-
+            
             tot_loss = z_loss + c_loss
             tot_loss.backward()
             generator_optimizer.step()
@@ -354,7 +345,7 @@ class Controlled_Generation_Sentence(nn.Module):
             z_out.backward(encoder_grad_z_out)
             encoder_optimizer.step()
             
-            return cross_entropy, kld, 1
+            return vae_loss, cross_entropy, kld, tot_loss 
 
         return train
     

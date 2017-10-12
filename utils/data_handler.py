@@ -90,10 +90,6 @@ class DataHandler:
 
         return x_dg
         
-
-
-
-        
     def create_generator_batch(self, x_gen, use_cuda):
 
         gen_batch_sen_len = [len(sentence) for sentence in x_gen]
