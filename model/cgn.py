@@ -126,7 +126,6 @@ class Controlled_Generation_Sentence(nn.Module):
             [encoder_word_input, encoder_character_input, decoder_word_input, _, target] = input
 
             encoder_word_input = t.from_numpy(encoder_word_input)
-            print encoder_word_input.size()
             encoder_word_input = Variable(encoder_word_input)
 
             if use_cuda:
@@ -144,7 +143,7 @@ class Controlled_Generation_Sentence(nn.Module):
             # bernoulli here with softmax[:,1]
             c = t.bernoulli(softmax[:, 1])
                         
-            return c
+            return c.data
             
         return discriminator_forward
         
@@ -188,7 +187,7 @@ class Controlled_Generation_Sentence(nn.Module):
             
             """
             # Calculate generator output entropy.
-            # TODO: Make entropy calculation generic for all generated_c.
+            
             
             prob_1 = t.sum(generated_c)/generated_c.size(0)
             
@@ -225,7 +224,9 @@ class Controlled_Generation_Sentence(nn.Module):
             log_softmax = F.log_softmax(logit)
             total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
             cross_entropy = total_batch_loss / data_handler.batch_size
-            softmax = t.exp(log_softmax) 
+            softmax = t.exp(log_softmax)
+            
+            # TODO: Make entropy calculation generic for all generated_c.
             emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax * log_softmax, 1)))
 
             optimizer.zero_grad()
@@ -269,7 +270,15 @@ class Controlled_Generation_Sentence(nn.Module):
             [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
             
             #--------------
-        
+
+            """
+            print 'Begin'
+            enc_params = self.encoder.named_parameters()
+            for name, p in enc_params:
+                print name, p.grad
+                break
+            """
+            
             [batch_size, _] = encoder_word_input.size()
             encoder_input = self.embedding(encoder_word_input, encoder_character_input)
 
@@ -278,10 +287,10 @@ class Controlled_Generation_Sentence(nn.Module):
             # Detach the z from the exising graph
             z = Variable(z_out.data, requires_grad=True)
             
-            c = Variable(c_target.data, requires_grad=False)
+            c = Variable(c_target, requires_grad=False)
             if use_cuda:
                 c = c.cuda()
-        
+
             kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
 
             c = c.view(c.size(0), 1)
@@ -300,10 +309,20 @@ class Controlled_Generation_Sentence(nn.Module):
             total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
             cross_entropy = total_batch_loss / batch_size
             
-            vae_loss = cross_entropy +  kld # kld_coef = 1
+            # vae_loss = cross_entropy +  kld # kld_coef = 1
             
-            vae_loss.backward(retain_variables=True)
+            # vae_loss.backward(retain_variables=True)
 
+            cross_entropy.backward(retain_variables=True)
+
+            """
+            print 'CrossEntropy Backward called'
+            enc_params = self.encoder.named_parameters()
+            for name, p in enc_params:
+                print name, p.grad
+                break
+            """
+            
             encoder_grad_z_out = z.grad.data
             # we can backprop encoder_grad_z_out from z_out to get encoder.grad
             
@@ -322,8 +341,9 @@ class Controlled_Generation_Sentence(nn.Module):
             # Generator loss using discriminator
             c_reconstructed = self.sentiment_discriminator(out_embedding)
             
-            c_target = c_target.long()
-            c_loss = F.cross_entropy(c_reconstructed, c_target)
+            # c_target = c_target.long()
+            c = c.long()
+            c_loss = F.cross_entropy(c_reconstructed, c.view(-1))
 
             # Generator loss using encoder
             encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
@@ -341,11 +361,40 @@ class Controlled_Generation_Sentence(nn.Module):
             tot_loss.backward()
             generator_optimizer.step()
 
+            """
+            print 'Encoder Gradient before Zero'
+            enc_params = self.encoder.named_parameters()
+            for name, p in enc_params:
+                print name, p.grad
+                break
+            """
+            
             encoder_optimizer.zero_grad()
-            z_out.backward(encoder_grad_z_out)
+
+            """
+            print 'Encoder Gradient After Zero'
+            enc_params = self.encoder.named_parameters()
+            for name, p in enc_params:
+                print name, p.grad
+                break
+            """
+            
+            z_out.backward(encoder_grad_z_out, retain_variables=True)
+            kld.backward()
+
+            """
+            print 'Encoder Gradient Final'
+            enc_params = self.encoder.named_parameters()
+            for name, p in enc_params:
+                print name, p.grad
+                break
+
+            sys.exit()
+            """
+            
             encoder_optimizer.step()
             
-            return vae_loss, cross_entropy, kld, tot_loss 
+            return cross_entropy, kld, tot_loss 
 
         return train
     

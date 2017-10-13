@@ -55,13 +55,13 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     num_line = (data_handler.gen_batch_loader.num_lines[0])
     num_line = num_line - num_line % batch_size
     num_batches = num_line / batch_size
-
+    
     c = []
     for batch_index in range(num_batches):
         c_batch = discriminator_forward(batch_index)
         c.append(c_batch)
-        if batch_index % 50 == 0:
-            print 'Batch: %d' % batch_index
+        if batch_index % 100 == 0:
+            print 'Batch: %d/%d' % (batch_index, num_batches) 
 
     c = t.stack(c, dim=0)
     c = c.view(-1)
@@ -81,25 +81,25 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
         for batch_index in range(num_batches):
 
             iteration = epoch*num_batches + batch_index
-            vae_loss, cross_entropy, kld, gen_loss = train_enc_gen(batch_index,
+            cross_entropy, kld, gen_loss = train_enc_gen(batch_index,
                                                      data_handler.batch_size,
                                                      use_cuda, dropout,
                                                      c_target=c)
 
-            vae_loss_val = vae_loss.data.cpu()[0]
             ce_loss_val = cross_entropy.data.cpu()[0]
             kld_val = kld.data.cpu()[0]
             gen_loss_val = gen_loss.data.cpu()[0]
-                        
-            if total_steps % 50 == 0:
+            vae_loss_val = kld_val+ce_loss_val
+            
+            if total_steps % 100 == 0:
                 
                 print('\n')
                 print ('------------------------')
                 print ('Encoder-Generator Data')
                 print ('Epoch: %d Batch_Index: %d/%d' % (epoch+1, batch_index, num_batches))
                 print ('Enc-Gen Training Step: %d' % total_steps)
-                print ('Encoder Loss: %f' % vae_loss_val)
-                print ('Generator Loss: %f' % (vae_loss_val+gen_loss_val))
+                print ('Encoder Loss (VAE Loss): %f' % vae_loss_val)
+                print ('Generator Loss (VAE_Loss+ z_recon_loss + c_recon_loss): %f' % (vae_loss_val+gen_loss_val))
                 print ('Cross Entropy: %f' % ce_loss_val)
                 print ('KLD: %f' % kld_val)
                 
@@ -155,7 +155,7 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
             
             epoch_loss += loss_val
                         
-            if total_training_steps % 50 == 0:
+            if total_training_steps % 100 == 0:
                 
                 print('\n')
                 print ('------------------------')
@@ -185,7 +185,7 @@ def main():
     parser.add_argument('--discriminator-epochs', type=int, default=1, help="num epochs for which disc is to be trained while alternating")
     parser.add_argument('--generator-epochs', type=int, default=1, help="num epochs for which gener is to be trained while alternating")
     parser.add_argument('--total-alternating-iterations', type=int, default=1000, help="number of alternating iterations")
-    parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--batch-size', type=int, default=50)
     parser.add_argument('--use-cuda', type=bool, default=True)
     parser.add_argument('--sample-generator', type=bool, default=False)
     parser.add_argument('--learning-rate', type=float, default=0.00005)
@@ -302,10 +302,10 @@ def main():
 
         for i in range(args.total_alternating_iterations):
             
-            total_discriminator_steps = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs,
+            total_discriminator_steps = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, \
                                                                       args.use_cuda, summary_writer, total_discriminator_steps)
             
-            total_generator_steps = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs,
+            total_generator_steps = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs, \
                                                           args.use_cuda, args.dropout, summary_writer, total_generator_steps)
 
         t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
