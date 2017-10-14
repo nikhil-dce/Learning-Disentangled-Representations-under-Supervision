@@ -193,6 +193,7 @@ def main():
     parser.add_argument('--generator-train-file', type=str, default=os.path.join(ROOT_DIR, 'raw_train_generator.pkl'))
     parser.add_argument('--embedding-path', type=str, default=os.path.join(ROOT_DIR, 'word_embeddings.npy'))
     parser.add_argument('--preload-initial-rvae', type=str, default=None)
+    parser.add_argument('--load-cgn', type=str, default=None)
     parser.add_argument('--save-model-dir', type=str, default=os.path.join(ROOT_DIR, 'snapshot/'))
     parser.add_argument('--words-vocab-path', type=str, default=os.path.join(ROOT_DIR, 'words_vocab.pkl'))
     parser.add_argument('--chars-vocab-path', type=str, default=os.path.join(ROOT_DIR, 'characters_vocab.pkl'))
@@ -224,7 +225,7 @@ def main():
     
     vocab_files = [args.words_vocab_path, args.chars_vocab_path]
 
-    train_initial_rvae = args.preload_initial_rvae == None
+    train_initial_rvae = (args.preload_initial_rvae == None and args.load_cgn == None)
     data_handler = DataHandler(vocab_files, args.generator_train_file, args.batch_size)    
     
     config = Config(data_handler.gen_batch_loader.max_word_len, data_handler.gen_batch_loader.max_seq_len, data_handler.gen_batch_loader.words_vocab_size, data_handler.gen_batch_loader.chars_vocab_size, args.learning_rate)
@@ -279,6 +280,14 @@ def main():
                 
         t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'initial_rvae'))
 
+    elif (args.load_cgn) :
+
+        # load cgn model and sample
+        cgn_model.load_state_dict(t.load(args.load_cgn))
+        print 'CGN Model loaded'
+        cgn_model.sample(data_handler, config, args.use_cuda)
+        sys.exit()
+        
     elif (args.sample_generator) :
 
         # load a pretrained model if needed
@@ -308,9 +317,10 @@ def main():
             total_generator_steps = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs, \
                                                           args.use_cuda, args.dropout, summary_writer, total_generator_steps)
 
-        t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
-
-        summary_writer.export_scalars_to_json(summary_dir+"all_scalars.json")
+            if (i+1) % 5 == 0:
+                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
+                summary_writer.export_scalars_to_json(summary_dir+"all_scalars.json")
+                
     else:
 
         summary_writer = SummaryWriter(ROOT_DIR+'snapshot/run_random_logs/')

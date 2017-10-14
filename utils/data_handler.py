@@ -37,13 +37,13 @@ class DataHandler:
         with open(discriminator_file, 'rb') as f:
             self.sentiment_discriminator_X, self.sentiment_discriminator_Y = pkl.load(f)
 
-        # Train Data : Dev Data => 5:1
-        self.sentiment_total_size = self.batch_size * 6 *  (len(self.sentiment_discriminator_X) // (6 * self.batch_size) )
+        # Train Data : Dev Data => 1:3
+        self.sentiment_total_size = self.batch_size * 3 *  (len(self.sentiment_discriminator_X) // (3 * self.batch_size) )
         self.total_sentiment = len(set(self.sentiment_discriminator_Y))
 
-        # Divide into 5:1
-        self.train_sentiment_size = 5 * self.sentiment_total_size // 6
-        self.dev_sentiment_size = self.sentiment_total_size // 6
+        # Divide into 1:3
+        self.train_sentiment_size =  self.sentiment_total_size // 3
+        self.dev_sentiment_size = 2 * self.sentiment_total_size // 3
 
         self.num_train_sentiment_batches = self.train_sentiment_size / self.batch_size
         self.num_dev_batches = self.dev_sentiment_size / self.batch_size

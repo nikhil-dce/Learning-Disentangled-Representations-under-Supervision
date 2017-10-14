@@ -711,11 +711,28 @@ class Controlled_Generation_Sentence(nn.Module):
 
         if print_sentences:
             print len(sentences)
-            for s in sentences:
+
+            seed_c = seed_c.numpy()
+            i = 0
+            for s in (sentences):
                 sen = ""
                 for word in s:
-                    sen += word
-                print sen
+                    sen += data_handler.gen_batch_loader.decode_word(word[0]) + ' '
+                print 'c={%d} : %s' % (seed_c[i], sen)
+                i += 1
+
+            """
+            for batch in sentences:
+                for i_best in batch:
+                    sentence = ""
+                    for word_code in i_best:
+                        word = batch_loader.decode_word(word_code)
+                        if word == batch_loader.end_token:
+                            break
+                        sentence += ' ' + word
+                    print sentence
+            """
+            
         else:
 
             all_sentences = []
