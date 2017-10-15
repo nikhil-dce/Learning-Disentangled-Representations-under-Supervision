@@ -248,8 +248,12 @@ class Controlled_Generation_Sentence(nn.Module):
             generated_loss_ce = F.nll_loss(log_softmax_generated, batch_generated_Y)
 
             # Calculate emperical shannon entropy from the probs when we use generated data as the input
-            emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax_generated*log_softmax_generated)))
-
+            # print log_softmax_generated.size()
+            # print (t.sum(log_softmax_generated, 1)).size()
+            # print (t.mean(t.sum(log_softmax_generated))).size()
+            # sys.exit()
+            emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax_generated*log_softmax_generated, 1)))
+            
             generated_loss = generated_loss_ce + self.config.beta * emperical_shannon_entropy
             
             #--------

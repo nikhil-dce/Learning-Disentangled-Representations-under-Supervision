@@ -170,8 +170,10 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
                 print ('Epoch: %d Batch: %d/%d' % (epoch+1, batch_index, num_train_batches))
                 print ('Total Training Steps: %d' % total_training_steps)
                 print ('Batch loss: %f' % loss_val)
-                print ('Labeled cross Entropy: %f' % train_ce_loss_val)
-                print ('Loss from generated data as input (generated_ce + emperical shannon entropy): %f' % generated_loss_val)
+                print ('Labeled cross entropy: %f' % train_ce_loss_val)
+                print ('Generated cross entropy: %f' % generated_loss_ce_val)
+                print ('Generated emperical_shannon_entropy: %f' % ese_loss_val)
+                print ('Loss from generated data as input (generated_ce + beta*emperical shannon entropy): %f' % generated_loss_val)
                 
                 summary_writer.add_scalar('train_discriminator/total_loss', loss_val, total_training_steps)
                 summary_writer.add_scalar('train_discriminator/labeled_cross_entropy', train_ce_loss_val, total_training_steps)
