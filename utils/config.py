@@ -2,7 +2,7 @@ from .functional import *
 
 
 class Config:
-    def __init__(self, max_word_len, max_seq_len, word_vocab_size, char_vocab_size, learning_rate):
+    def __init__(self, max_word_len, max_seq_len, word_vocab_size, char_vocab_size, learning_rate, lambda_c, lambda_z, lambda_u, beta):
 
         self.learning_rate = learning_rate
         self.max_word_len = int(max_word_len)
@@ -25,8 +25,13 @@ class Config:
         self.decoder_rnn_size = 600
         self.decoder_num_layers = 2
 
-
         # Sentiment Discriminator
         self.sentiment_kernel_size = [3,4,5]
         self.sentiment_kernel_num = 100
         self.sentiment_dropout = 0.3
+
+        # Loss function flags
+        self.lambda_c = lambda_c
+        self.lambda_u = lambda_u
+        self.lambda_z = lambda_z
+        self.beta = beta

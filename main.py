@@ -50,20 +50,27 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
 
     pass_gradient_to_generator = False
     batch_size = 500
-    discriminator_forward = cgn_model.discriminator_forward_function (data_handler, use_cuda, pass_gradient_to_generator, batch_size)
+    discriminator_forward = cgn_model.discriminator_forward_function (data_handler, use_cuda, pass_gradient_to_generator)
         
     num_line = (data_handler.gen_batch_loader.num_lines[0])
-    num_line = num_line - num_line % batch_size
     num_batches = num_line / batch_size
     
     c = []
-    for batch_index in range(num_batches):
-        c_batch = discriminator_forward(batch_index)
+    for batch_index in range(num_batches+1):
+        start_index = batch_index * batch_size
+        if (batch_index < num_batches):
+            c_batch = discriminator_forward(start_index, batch_size)
+        elif (num_line % batch_size != 0):
+            batch_size = num_line % batch_size
+            c_batch = discriminator_forward(start_index, batch_size)
+        else:
+            break
+            
         c.append(c_batch)
         if batch_index % 100 == 0:
-            print 'Batch: %d/%d' % (batch_index, num_batches) 
+            print 'Batch: %d/%d Start_Index: %d Batch_Size:%d' % (batch_index, num_batches, start_index, batch_size) 
 
-    c = t.stack(c, dim=0)
+    c = t.cat(c, dim=0)
     c = c.view(-1)
         
     #----------------------Now Train Encoder-Generator--------------------------------
@@ -79,12 +86,14 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
 
     for epoch in range(0, num_epochs):
         for batch_index in range(num_batches):
+            
+            start_index = batch_index*data_handler.batch_size
 
-            iteration = epoch*num_batches + batch_index
-            cross_entropy, kld, gen_loss = train_enc_gen(batch_index,
-                                                     data_handler.batch_size,
-                                                     use_cuda, dropout,
-                                                     c_target=c)
+            # total_steps is used for kld linear annealing
+            cross_entropy, kld, gen_loss, kld_coeff = train_enc_gen(start_index,
+                                                    data_handler.batch_size,
+                                                    use_cuda, dropout,
+                                                    c_target=c, global_step=total_steps)
 
             ce_loss_val = cross_entropy.data.cpu()[0]
             kld_val = kld.data.cpu()[0]
@@ -107,7 +116,7 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                 summary_writer.add_scalar('train_enc_gen/generator_loss', (vae_loss_val+gen_loss_val), total_steps)
                 summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
                 summary_writer.add_scalar('train_enc_gen/kld', kld_val, total_steps)
-                
+                summary_writer.add_scalar('train_enc_gen/kld_coeff', kld_coeff)
             total_steps += 1
             
     return total_steps
@@ -136,8 +145,6 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
 
     for epoch in range(0, num_epochs):
 
-        epoch_loss = 0
-
         for batch_index in range(num_train_batches):
 
             generated_samples, generated_c = [], []
@@ -147,13 +154,13 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
                 generated_c.extend(gen_c)
 
             generated_c = t.stack(generated_c, dim=0)
-            batch_loss, batch_cross_entropy, batch_emperical_shannon_entropy = sentiment_disc_train_step(generated_samples, generated_c, batch_index)
+            total_loss, batch_train_ce_loss, generated_loss, generated_loss_ce, emperical_shannon_entropy = sentiment_disc_train_step(generated_samples, generated_c, batch_index)
 
-            loss_val = batch_loss.data.cpu()[0]
-            ce_loss_val = batch_cross_entropy.data.cpu()[0]
-            ese_loss_val = batch_emperical_shannon_entropy.data.cpu()[0]
-            
-            epoch_loss += loss_val
+            loss_val = total_loss.data.cpu()[0]
+            train_ce_loss_val = batch_train_ce_loss.data.cpu()[0]
+            generated_loss_val = generated_loss.data.cpu()[0]
+            generated_loss_ce_val = generated_loss_ce.data.cpu()[0]
+            ese_loss_val = emperical_shannon_entropy.data.cpu()[0]
                         
             if total_training_steps % 100 == 0:
                 
@@ -163,13 +170,15 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
                 print ('Epoch: %d Batch: %d/%d' % (epoch+1, batch_index, num_train_batches))
                 print ('Total Training Steps: %d' % total_training_steps)
                 print ('Batch loss: %f' % loss_val)
-                print ('Batch cross Entropy: %f' % ce_loss_val)
-                print ('Batch emperical shannon entropy: %f' % ese_loss_val)  
-
+                print ('Labeled cross Entropy: %f' % train_ce_loss_val)
+                print ('Loss from generated data as input (generated_ce + emperical shannon entropy): %f' % generated_loss_val)
+                
                 summary_writer.add_scalar('train_discriminator/total_loss', loss_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator/cross_entropy', ce_loss_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator/cross_entropy', ce_loss_val, total_training_steps)
-                                
+                summary_writer.add_scalar('train_discriminator/labeled_cross_entropy', train_ce_loss_val, total_training_steps)
+                summary_writer.add_scalar('train_discriminator/generated_total_loss', generated_loss_val, total_training_steps)
+                summary_writer.add_scalar('train_discriminator/generated_cross_entropy', generated_loss_ce_val, total_training_steps)
+                summary_writer.add_scalar('train_discriminator/generated_emperical_shannon', ese_loss_val, total_training_steps)
+                
             total_training_steps += 1
 
         epoch += 1
@@ -199,7 +208,10 @@ def main():
     parser.add_argument('--chars-vocab-path', type=str, default=os.path.join(ROOT_DIR, 'characters_vocab.pkl'))
     parser.add_argument('--sentiment-discriminator-train-file', type=str, default=os.path.join(ROOT_DIR, 'raw_train_sentiment_discriminator.pkl'))
     parser.add_argument('--train-cgn-model', type=bool, default=False)
-    
+    parser.add_argument('--lambda-z', type=float, default=0.1, help='Z Reconstruction Generator Loss Coeff (Default=0.1)')
+    parser.add_argument('--lambda-u', type=float, default=0.1, help='C Reconstruction for Generated Data (Sleep phase) Discriminator Loss Coeff (Default=0.1)')
+    parser.add_argument('--lambda-c', type=float, default=0.1, help='C Reconstruction Generator Loss Coeff (Default=0.1)')
+    parser.add_argument('--beta', type=float, default=1, help='Normalizing Coeff for entropy')
     args = parser.parse_args()
 
     if not os.path.exists(args.embedding_path):
@@ -228,7 +240,7 @@ def main():
     train_initial_rvae = (args.preload_initial_rvae == None and args.load_cgn == None)
     data_handler = DataHandler(vocab_files, args.generator_train_file, args.batch_size)    
     
-    config = Config(data_handler.gen_batch_loader.max_word_len, data_handler.gen_batch_loader.max_seq_len, data_handler.gen_batch_loader.words_vocab_size, data_handler.gen_batch_loader.chars_vocab_size, args.learning_rate)
+    config = Config(data_handler.gen_batch_loader.max_word_len, data_handler.gen_batch_loader.max_seq_len, data_handler.gen_batch_loader.words_vocab_size, data_handler.gen_batch_loader.chars_vocab_size, args.learning_rate, args.lambda_c, args.lambda_z, args.lambda_u, args.beta)
     
     cgn_model = Controlled_Generation_Sentence(config, args.embedding_path)
 
@@ -294,7 +306,8 @@ def main():
         cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
         print 'Initial Model Loaded'
         cgn_model.sample(data_handler, config, args.use_cuda)
-
+        sys.exit()
+        
     elif (args.train_cgn_model):
 
         summary_dir = ROOT_DIR+'snapshot/train_cgn_logs/'

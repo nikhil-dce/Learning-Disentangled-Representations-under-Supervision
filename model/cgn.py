@@ -94,7 +94,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return out, final_state, kld, mu, std, z
 
-    def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator, batch_size):
+    def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator):
         """
         Discriminator forward function
         
@@ -111,7 +111,7 @@ class Controlled_Generation_Sentence(nn.Module):
         self.sentiment_discriminator.set_pass_gradient_to_generator(pass_gradient_to_generator)
         self.sentiment_discriminator.eval()
         
-        def discriminator_forward(batch_index):
+        def discriminator_forward(start_index, batch_size):
 
             """
             This function is used at the start of generator-encoder training interation. 
@@ -122,7 +122,7 @@ class Controlled_Generation_Sentence(nn.Module):
             * batch_index: batch index 
             """
             
-            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', start_index)
             [encoder_word_input, encoder_character_input, decoder_word_input, _, target] = input
 
             encoder_word_input = t.from_numpy(encoder_word_input)
@@ -183,22 +183,24 @@ class Controlled_Generation_Sentence(nn.Module):
             # Get labeled training data from the dataset 
             batch_train_X, batch_train_Y = data_handler.get_sentiment_train_batch(batch_index)
 
-            #--------------
+            #-------------- Calculate Loss for labeled data first
+
+            # We will do separate forward pass for generated data and data from the labeled dataset
+            # This is simply due to that fact that we have to weight the loss from generted data
+            batch_train_X = Variable(data_handler.create_sentiment_batch(batch_train_X))
+            batch_generated_X = Variable(data_handler.create_sentiment_batch(generated_samples))
+
+            batch_train_Y = t.from_numpy(np.array(batch_train_Y))
+            batch_train_Y = Variable(batch_train_Y.long())
+            batch_generated_Y = generated_c.view(-1)
+            batch_generated_Y = batch_generated_Y.long()
+            batch_generated_Y = Variable(batch_generated_Y)
             
-            """
-            # Calculate generator output entropy.
-            
-            
-            prob_1 = t.sum(generated_c)/generated_c.size(0)
-            
-            entropy = prob_1*t.log(prob_1) + (1-prob_1)*t.log(1-prob_1)
-            entropy = entropy / math.log(2)
-            """
-            
+            '''
             batch_train_X.extend(generated_samples)
+
             batch_train_X = data_handler.create_sentiment_batch(batch_train_X)
             batch_train_X = Variable(batch_train_X)
-            
             batch_train_Y = t.from_numpy(np.array(batch_train_Y))
             #batch_train_Y = batch_train_Y.view(batch_train_Y.size(0), 1)
 
@@ -207,8 +209,9 @@ class Controlled_Generation_Sentence(nn.Module):
             generated_c = generated_c.long()
             batch_train_Y = t.cat((batch_train_Y, generated_c) ,dim=0)
             batch_train_Y = Variable(batch_train_Y)
-            
+            '''
             #--------------
+            # Labeled Data
 
             batch_size = batch_train_X.size(0)
                         
@@ -220,23 +223,56 @@ class Controlled_Generation_Sentence(nn.Module):
             batch_train_X = self.embedding.word_embed(batch_train_X)
             logit = self.sentiment_discriminator(batch_train_X)
 
+            batch_train_ce_loss = F.cross_entropy(logit, batch_train_Y)
+
+            '''
             # equivalent to loss = F.cross_entropy(logit, target)
             log_softmax = F.log_softmax(logit)
             total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
             cross_entropy = total_batch_loss / data_handler.batch_size
             softmax = t.exp(log_softmax)
+            '''
+
+            #------------
+            # Loss from generated data
+
+            if use_cuda:
+                batch_generated_X = batch_generated_X.cuda()
+                batch_generated_Y = batch_generated_Y.cuda()
+
+            batch_generated_X = self.embedding.word_embed(batch_generated_X)
+            logit_generated = self.sentiment_discriminator(batch_generated_X)
+
+            log_softmax_generated = F.log_softmax(logit_generated)
+            softmax_generated = t.exp(log_softmax_generated)
+            generated_loss_ce = F.nll_loss(log_softmax_generated, batch_generated_Y)
+
+            # Calculate emperical shannon entropy from the probs when we use generated data as the input
+            emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax_generated*log_softmax_generated)))
+
+            generated_loss = generated_loss_ce + self.config.beta * emperical_shannon_entropy
             
+            #--------
+            # Total Loss
+
+            total_loss = batch_train_ce_loss + self.config.lambda_u*generated_loss
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+            
+            '''
             # TODO: Make entropy calculation generic for all generated_c.
             emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax * log_softmax, 1)))
-
+            
             optimizer.zero_grad()
             loss = cross_entropy + emperical_shannon_entropy
             loss.backward()
             optimizer.step()
-
+            '''
+            
             # return the total_batch_loss
             # can be used to calculate the total epoch loss
-            return loss, cross_entropy, emperical_shannon_entropy
+            return total_loss, batch_train_ce_loss, generated_loss, generated_loss_ce, emperical_shannon_entropy
 
         return train
 
@@ -249,20 +285,21 @@ class Controlled_Generation_Sentence(nn.Module):
         # Train Mode on for encoder and generator
         self.encoder_mode(train_mode=True)
         self.generator_mode(train_mode=True)
+        self.encoder.train()
+        self.generator.train()
         
         # Two optimizers
         encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
         generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
 
-        def train(batch_index, batch_size, use_cuda, dropout, c_target):
+        def train(start_index, batch_size, use_cuda, dropout, c_target, global_step):
             
             encoder_optimizer.zero_grad()
             generator_optimizer.zero_grad()
-
-            indexes = np.array(range(batch_index, batch_index+batch_size))
-            c_target = c_target[batch_index:batch_index+batch_size]
             
-            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', batch_index)
+            c_target = c_target[start_index:start_index+batch_size]
+            
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', start_index)
             input = [Variable(t.from_numpy(var)) for var in input]
             input = [var.long() for var in input]
             input = [var.cuda() if use_cuda else var for var in input]
@@ -291,6 +328,7 @@ class Controlled_Generation_Sentence(nn.Module):
             if use_cuda:
                 c = c.cuda()
 
+            kld_coeff = kld_coef(global_step)
             kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
 
             c = c.view(c.size(0), 1)
@@ -321,7 +359,7 @@ class Controlled_Generation_Sentence(nn.Module):
             for name, p in enc_params:
                 print name, p.grad
                 break
-            """
+                        """
             
             encoder_grad_z_out = z.grad.data
             # we can backprop encoder_grad_z_out from z_out to get encoder.grad
@@ -357,7 +395,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
             z_loss = t.sum(t.sqrt(l2_loss))/batch_size
             
-            tot_loss = z_loss + c_loss
+            tot_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
             tot_loss.backward()
             generator_optimizer.step()
 
@@ -380,7 +418,8 @@ class Controlled_Generation_Sentence(nn.Module):
             """
             
             z_out.backward(encoder_grad_z_out, retain_variables=True)
-            kld.backward()
+            kld_loss = kld*kld_coeff
+            kld_loss.backward()
 
             """
             print 'Encoder Gradient Final'
@@ -394,7 +433,7 @@ class Controlled_Generation_Sentence(nn.Module):
             
             encoder_optimizer.step()
             
-            return cross_entropy, kld, tot_loss 
+            return cross_entropy, kld, tot_loss, kld_coeff 
 
         return train
     
@@ -697,6 +736,7 @@ class Controlled_Generation_Sentence(nn.Module):
         * seed_c: the corresponding structured codeword
         """
 
+        self.generator.eval()
         
         samp = 10
         seed_z = t.randn([samp, config.latent_variable_size])
@@ -759,6 +799,9 @@ class Controlled_Generation_Sentence(nn.Module):
         * all_gen_samples: softmax outputs of the generator
         * seed_c: the corresponding structured codeword
         """
+
+        self.generator.eval()
+        
         seed_z = t.randn([sample, config.latent_variable_size])
         init_prob = t.ones(sample, 1) * 0.5
         seed_c = t.bernoulli(init_prob)
