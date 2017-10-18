@@ -226,6 +226,14 @@ class BatchLoader:
         # Num lines in data array
         self.num_lines = [len(target) for target in data_words]
 
+        self.train_lines = 5 * self.num_lines[0] // 6
+        self.val_lines = self.num_lines[0] - self.train_lines
+        
+        print 'Total Lines: %d'%self.num_lines[0]
+        print 'Total train lines: %d'%self.train_lines
+        print 'Total val lines: %d'%self.val_lines
+        
+    
         # Following data from word and char vocab
         # Simple array of words and chars
         [self.idx_to_word, self.idx_to_char] = [cPickle.load(open(file, "rb")) for file in idx_files]
@@ -246,8 +254,10 @@ class BatchLoader:
             [[list(map(self.encode_characters, line)) for line in target] for target in data_words])
         
     def next_batch(self, batch_size, target_str, start_index):
-        # target = 0 if target_str == 'train' else 1
-        
+
+        if target_str == 'valid':
+            start_index = start_index + self.train_lines
+
         target = 0
         indexes = np.array(range(start_index, start_index+batch_size))
  
@@ -262,7 +272,6 @@ class BatchLoader:
         decoder_character_input = [[self.encode_characters(self.go_token)] + line for line in encoder_character_input]
         decoder_output = [line + [self.word_to_idx[self.end_token]] for line in encoded_words]
                 
-        # sorry
         for i, line in enumerate(decoder_word_input):
             line_len = input_seq_len[i]
             to_add = max_input_seq_len - line_len

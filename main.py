@@ -18,7 +18,7 @@ from model.cgn import Controlled_Generation_Sentence
 import torchvision
 from tensorboardX import SummaryWriter
 
-ROOT_DIR = '/data1/nikhil/sentence-corpus/'
+ROOT_DIR = '/data1/nikhil/cgn_train_data/'
 
 def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda, dropout, summary_writer, total_steps):
     """
@@ -90,15 +90,17 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             start_index = batch_index*data_handler.batch_size
 
             # total_steps is used for kld linear annealing
-            cross_entropy, kld, gen_loss, kld_coeff = train_enc_gen(start_index,
-                                                    data_handler.batch_size,
-                                                    use_cuda, dropout,
-                                                    c_target=c, global_step=total_steps)
+            cross_entropy, kld, generated_recon_loss, z_loss, c_loss, kld_coeff = train_enc_gen(start_index,
+                                                                                                data_handler.batch_size,
+                                                                                                use_cuda, dropout,
+                                                                                                c_target=c, global_step=total_steps)
 
             ce_loss_val = cross_entropy.data.cpu()[0]
             kld_val = kld.data.cpu()[0]
-            gen_loss_val = gen_loss.data.cpu()[0]
-            vae_loss_val = kld_val+ce_loss_val
+            gen_loss_val = generated_recon_loss.data.cpu()[0]
+            vae_loss_val = kld_val*kld_coeff+ce_loss_val
+            z_loss_val = z_loss.data.cpu()[0]
+            c_loss_val = c_loss.data.cpu()[0]
             
             if total_steps % 100 == 0:
                 
@@ -108,15 +110,21 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                 print ('Epoch: %d Batch_Index: %d/%d' % (epoch+1, batch_index, num_batches))
                 print ('Enc-Gen Training Step: %d' % total_steps)
                 print ('Encoder Loss (VAE Loss): %f' % vae_loss_val)
-                print ('Generator Loss (VAE_Loss+ z_recon_loss + c_recon_loss): %f' % (vae_loss_val+gen_loss_val))
+                print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (vae_loss_val+gen_loss_val))
+                print ('Generator z Loss: %f' % z_loss_val)
+                print ('Generator c Loss: %f' % c_loss_val)
                 print ('Cross Entropy: %f' % ce_loss_val)
                 print ('KLD: %f' % kld_val)
                 
+                
                 summary_writer.add_scalar('train_enc_gen/encoder_loss', vae_loss_val, total_steps)
                 summary_writer.add_scalar('train_enc_gen/generator_loss', (vae_loss_val+gen_loss_val), total_steps)
+                summary_writer.add_scalar('train_enc_gen/generator_z_loss', z_loss_val, total_steps)
+                summary_writer.add_scalar('train_enc_gen/generator_c_loss', c_loss_val, total_steps)
                 summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
                 summary_writer.add_scalar('train_enc_gen/kld', kld_val, total_steps)
                 summary_writer.add_scalar('train_enc_gen/kld_coeff', kld_coeff)
+                
             total_steps += 1
             
     return total_steps
@@ -193,10 +201,10 @@ def main():
     parser = argparse.ArgumentParser(description='Controlled_Generation_Sentence')
 
     parser.add_argument('--rvae-initial-iterations', type=int, default=120000, help="initial rvae training steps")
-    parser.add_argument('--discriminator-epochs', type=int, default=1, help="num epochs for which disc is to be trained while alternating")
+    parser.add_argument('--discriminator-epochs', type=int, default=10, help="num epochs for which disc is to be trained while alternating")
     parser.add_argument('--generator-epochs', type=int, default=1, help="num epochs for which gener is to be trained while alternating")
     parser.add_argument('--total-alternating-iterations', type=int, default=1000, help="number of alternating iterations")
-    parser.add_argument('--batch-size', type=int, default=50)
+    parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--use-cuda', type=bool, default=True)
     parser.add_argument('--sample-generator', type=bool, default=False)
     parser.add_argument('--learning-rate', type=float, default=0.00005)
@@ -259,19 +267,21 @@ def main():
 
         
         initial_train_step = cgn_model.initial_rvae_trainer(data_handler)
-        # initial_validate_step ?
+        initial_valid_step = cgn_model.initial_rvae_valid(data_handler)
 
         start_index = 0
         ce_result = 0
         kld_result = 0
 
-        num_line = (data_handler.gen_batch_loader.num_lines[0])
-        num_line = num_line - num_line % args.batch_size
+        train_lines = data_handler.gen_batch_loader.train_lines
+        train_lines = train_lines - train_lines % args.batch_size
+        #num_line = (data_handler.gen_batch_loader.num_lines[0])
+        #num_line = num_line - num_line % args.batch_size
         print 'Begin Step 1. Initial VAE Training'
 
         for iteration in range(start_iteration, args.rvae_initial_iterations):
 
-            start_index = (start_index+args.batch_size)%num_line
+            start_index = (start_index+args.batch_size)%train_lines
             cross_entropy, kld, coef, total_loss = initial_train_step(iteration, args.batch_size, args.use_cuda, args.dropout, start_index)
 
             if iteration % 50 == 0:
@@ -280,7 +290,7 @@ def main():
                 total_loss_val = total_loss.data.cpu()[0]
 
                 print('\n')
-                print ('------------------------')
+                print ('-----------Training-------------')
                 print ('Iteration: %d'%iteration)
                 print ('Cross entropy: %f'%ce_loss_val)
                 print ('KLD: %f'%kld_loss_val)
@@ -291,8 +301,46 @@ def main():
                 summary_writer.add_scalar('train_initial_rvae/kld', kld_loss_val, iteration)
                 summary_writer.add_scalar('train_initial_rvae/cross_entropy', ce_loss_val, iteration)                
                 summary_writer.add_scalar('train_initial_rvae/total_loss', (total_loss_val), iteration)
+
+
+            if iteration % 500 == 0:
+                # do validation
+
+                valid_ce_val = 0
+                valid_kld_val = 0
+                valid_total_loss_val = 0
+
+                num_valid_iterations = data_handler.gen_batch_loader.val_lines / args.batch_size
+                valid_index = 0
                 
-        t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'initial_rvae'))
+                for valid_step in range(num_valid_iterations):
+                    
+                    valid_index = valid_step*args.batch_size
+                    cross_entropy, kld, coef, total_loss = initial_valid_step(iteration, args.batch_size, args.use_cuda, 1, valid_index)
+                    
+                    valid_ce_val += cross_entropy.data.cpu()[0]
+                    valid_kld_val += kld.data.cpu()[0]
+                    valid_total_loss_val += total_loss.data.cpu()[0]
+
+                valid_ce_val /= num_valid_iterations
+                valid_kld_val /= num_valid_iterations
+                valid_total_loss_val /= num_valid_iterations
+                
+                print('\n')
+                print ('-----------Validation-------------')
+                print ('Iteration: %d'%iteration)
+                print ('Total Cross entropy: %f'%valid_ce_val)
+                print ('KLD: %f'%valid_kld_val)
+                print ('KLD Coef: %f' % coef)
+                print ('Total Loss: %f'%(valid_total_loss_val))
+                    
+                summary_writer.add_scalar('valid_initial_rvae/kld_coef', coef, iteration)
+                summary_writer.add_scalar('valid_initial_rvae/kld', valid_kld_val, iteration)
+                summary_writer.add_scalar('valid_initial_rvae/cross_entropy', valid_ce_val, iteration)                
+                summary_writer.add_scalar('valid_initial_rvae/total_loss', valid_total_loss_val, iteration)
+
+            if (iteration+1) % 10000 == 0:
+                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, ('initial_rvae_%d'%(iteration+1))))
 
     elif (args.load_cgn) :
 
@@ -312,7 +360,7 @@ def main():
         
     elif (args.train_cgn_model):
 
-        summary_dir = ROOT_DIR+'snapshot/train_cgn_logs/'
+        summary_dir = ROOT_DIR+'snapshot/train_cgn_logs_scaled_cr/'
         summary_writer = SummaryWriter(summary_dir)
         
         # Load pretrained
@@ -332,8 +380,8 @@ def main():
             total_generator_steps = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs, \
                                                           args.use_cuda, args.dropout, summary_writer, total_generator_steps)
 
-            if (i+1) % 5 == 0:
-                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
+            if (i) % 2 == 0:
+                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model_scaled'))
                 summary_writer.export_scalars_to_json(summary_dir+"all_scalars.json")
                 
     else:

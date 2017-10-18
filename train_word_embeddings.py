@@ -40,12 +40,13 @@ if __name__ == '__main__':
     if args.train_file.endswith('.txt'):
         data_files = [args.train_file]
         data = [open(file, "r").read() for file in data_files]
-                
+    
     elif args.train_file.endswith('.pkl'):
-        data_files = [args.train_file]
+        data_files = args.train_file.split(',')
+        print data_files
         data = [pkl.load(open(file, "rb")) for file in data_files]
         sentence_array = True
-        
+    
     idx_files = [args.save_at + '/words_vocab.pkl',
                       args.save_at + '/characters_vocab.pkl']
 
@@ -82,5 +83,7 @@ if __name__ == '__main__':
             out = out.cpu().data.numpy()[0]
             print('iteration = {}, loss = {}'.format(iteration, out))
 
-    word_embeddings = neg_loss.input_embeddings()
-    np.save(args.save_at + '/word_embeddings.npy', word_embeddings)
+        if (1+iteration) % 100000 == 0: 
+            word_embeddings = neg_loss.input_embeddings()
+            np.save((args.save_at + '/word_embeddings_%d.npy'%iteration), word_embeddings)
+    

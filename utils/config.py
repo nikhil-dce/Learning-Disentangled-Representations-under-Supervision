@@ -18,11 +18,11 @@ class Config:
         self.sum_depth = fold(lambda x, y: x + y, [depth for _, depth in self.kernels], 0)
 
         self.encoder_rnn_size = 600
-        self.encoder_num_layers = 2
+        self.encoder_num_layers = 1 # Encoder 1 layer is enough
 
         self.latent_variable_size = 1100
 
-        self.decoder_rnn_size = 600
+        self.decoder_rnn_size = 800
         self.decoder_num_layers = 2
 
         # Sentiment Discriminator

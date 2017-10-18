@@ -68,7 +68,7 @@ class Controlled_Generation_Sentence(nn.Module):
     def train_rvae (self, drop_prob, encoder_word_input=None, encoder_char_input=None, generator_word_input=None):
 
         """
-        VAE Train step with random c codeword draw from bernoulli
+        VAE Forward step with random c codeword drawn from bernoulli
         """
         
         use_cuda = self.embedding.word_embed.weight.is_cuda
@@ -78,7 +78,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
         z, std, logvar, mu = self.encode_for_z(encoder_input, batch_size, use_cuda)
 
-        # use random codewor
+        # use random codeword
         init_prob = t.ones(batch_size, 1)*0.5
         c = Variable(t.bernoulli(init_prob), requires_grad=False)
 
@@ -332,7 +332,7 @@ class Controlled_Generation_Sentence(nn.Module):
             if use_cuda:
                 c = c.cuda()
 
-            kld_coeff = kld_coef(global_step)
+            kld_coeff = kld_coef(global_step, extended=True)
             kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
 
             c = c.view(c.size(0), 1)
@@ -349,7 +349,7 @@ class Controlled_Generation_Sentence(nn.Module):
             # cross_entropy = F.cross_entropy(logits, target)
             log_softmax = F.log_softmax(logits)
             total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
-            cross_entropy = total_batch_loss / batch_size
+            cross_entropy = 80 * total_batch_loss / batch_size
             
             # vae_loss = cross_entropy +  kld # kld_coef = 1
             
@@ -399,8 +399,8 @@ class Controlled_Generation_Sentence(nn.Module):
 
             z_loss = t.sum(t.sqrt(l2_loss))/batch_size
             
-            tot_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
-            tot_loss.backward()
+            total_reconstruction_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
+            total_reconstruction_loss.backward()
             generator_optimizer.step()
 
             """
@@ -437,11 +437,15 @@ class Controlled_Generation_Sentence(nn.Module):
             
             encoder_optimizer.step()
             
-            return cross_entropy, kld, tot_loss, kld_coeff 
+            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff 
 
         return train
+
     
     def initial_rvae_trainer(self, data_handler):
+
+        self.encoder.train()
+        self.generator.train()
         
         optimizer = Adam(self.learnable_parameters(), self.config.learning_rate)
         def train(i, batch_size, use_cuda, dropout, start_index):
@@ -470,6 +474,35 @@ class Controlled_Generation_Sentence(nn.Module):
             return cross_entropy, kld, kld_coef(i), loss
 
         return train
+
+    
+    def initial_rvae_valid(self, data_handler):
+
+        # Should remove the dropout scaling
+        self.encoder.eval()
+        self.generator.eval()
+        
+        def valid(i, batch_size, use_cuda, dropout, start_index):
+
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'valid', start_index)
+            input = [Variable(t.from_numpy(var)) for var in input]
+            input = [var.long() for var in input]
+            input = [var.cuda() if use_cuda else var for var in input]
+
+            [encoder_word_input, encoder_character_input, decoder_word_input,_, target] = input
+
+            logits, _, kld,_ ,_ ,_ = self.train_rvae(0,
+                                  encoder_word_input, encoder_character_input,
+                                  decoder_word_input)
+
+            logits = logits.view(-1, self.config.word_vocab_size)
+            target = target.view(-1)
+            cross_entropy = F.cross_entropy(logits, target)
+
+            loss = 79 * cross_entropy + kld_coef(i) * kld
+            return cross_entropy, kld, kld_coef(i), loss
+
+        return valid
 
     def encoder_params(self):
 
@@ -742,16 +775,23 @@ class Controlled_Generation_Sentence(nn.Module):
 
         self.generator.eval()
         
-        samp = 10
+        samp = 5
         seed_z = t.randn([samp, config.latent_variable_size])
-        init_prob = t.ones(samp, 1)*0.5
-        seed_c = t.bernoulli(init_prob)
+        seed_z = seed_z.unsqueeze(1)
+        seed_z = seed_z.repeat(1, 2, 1)
+        seed_z = seed_z.view(-1, config.latent_variable_size)
+        
+        #init_prob = t.ones(samp, 1)*0.5
+        #seed_c = t.bernoulli(init_prob)
+        seed_c = t.ones(2*samp, 1)
+        for i in range(samp):
+            seed_c[2*i+1] = 0
         
         seed = t.cat((seed_z, seed_c), 1)
 
         print seed.size()
         
-        sentences, result_score = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best = 1, samples=samp)
+        sentences, result_score = self.sample_from_generator(data_handler.gen_batch_loader, config.max_seq_len, seed, use_cuda, n_best = 1, samples=2*samp)
 
         if print_sentences:
             print len(sentences)
