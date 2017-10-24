@@ -396,7 +396,7 @@ class Controlled_Generation_Sentence(nn.Module):
         
     def valid_encoder_generator(self, data_handler):
         
-        def valid(start_index, batch_size, use_cuda, dropout, c_target, global_step):
+        def valid(start_index, batch_size, use_cuda, c_target, global_step):
 
             c_target = c_target[start_index:start_index+batch_size]
 
@@ -428,7 +428,7 @@ class Controlled_Generation_Sentence(nn.Module):
 
             input_code = t.cat((z,c), 1)
             generator_input = self.embedding.word_embed(gen_word_input)
-            logits, _ = self.generator(generator_input, input_code, dropout, None)
+            logits, _ = self.generator(generator_input, input_code, 0.0, None)
             
             # --------------
             
@@ -638,9 +638,6 @@ class Controlled_Generation_Sentence(nn.Module):
 
     
     def initial_rvae_trainer(self, data_handler):
-
-        self.encoder.train()
-        self.generator.train()
         
         optimizer = Adam(self.learnable_parameters(), self.config.learning_rate)
         def train(i, batch_size, use_cuda, dropout, start_index):
@@ -673,11 +670,6 @@ class Controlled_Generation_Sentence(nn.Module):
     
     def initial_rvae_valid(self, data_handler):
 
-        # Should remove the dropout scaling
-        # TODO: Do this inside the valid function
-        self.encoder.eval()
-        self.generator.eval()
-        
         def valid(i, batch_size, use_cuda, dropout, start_index):
 
             input = data_handler.gen_batch_loader.next_batch(batch_size, 'valid', start_index)
@@ -719,8 +711,6 @@ class Controlled_Generation_Sentence(nn.Module):
         Uses less memory when training the generator 
         """
         
-        print 'Encoder Train Mode: %d' % train_mode
-
         for i, param in enumerate(self.encoder.parameters()):
 
             if train_mode:
@@ -755,7 +745,6 @@ class Controlled_Generation_Sentence(nn.Module):
         
     def discriminator_mode(self, train_mode=True):
 
-        print 'Discriminator Train: %d' % train_mode
         for i, param in enumerate(self.sentiment_discriminator.parameters()):
             
             if train_mode:
@@ -765,8 +754,6 @@ class Controlled_Generation_Sentence(nn.Module):
                 param.requires_grad = False
 
     def generator_mode(self, train_mode=True):
-
-        print 'Generator Train Mode: %d' % train_mode
 
         for i, param in enumerate(self.generator.parameters()):
             
@@ -798,8 +785,6 @@ class Controlled_Generation_Sentence(nn.Module):
         * all_sentences, all_scores: (sentence in words, join probability scores), if learning is false
         
         """
-
-        # self.generator in eval?
 
         self.generator.eval()
         

@@ -23,7 +23,8 @@ ROOT_DIR = '/data1/nikhil/cgn_train_data/'
 # % Validation check to determine the switch
 VALIDATION_DIFF = 5
 
-def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda, dropout, summary_writer, total_steps):
+def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda, dropout, summary_writer, total_steps, valid_prev_loss):
+
     """
     Trains encoder-generator while keeping the discriminator fixed using the following loss functions:
     - encoder_loss = VAE Loss = KLD + Cross Entropy Loss
@@ -86,116 +87,132 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     cgn_model.prep_enc_gen_training()
     train_enc_gen = cgn_model.train_encoder_generator(data_handler)
     valid_enc_gen = cgn_model.valid_encoder_generator(data_handler)
-    
-    for epoch in range(0, num_epochs):
-        for batch_index in range(num_batches):
-            
-            start_index = batch_index*data_handler.batch_size
 
-            # total_steps is used for kld linear annealing
-            cross_entropy, kld, generated_recon_loss, z_loss, c_loss, kld_coeff = train_enc_gen(start_index,
+    batch_index = 0
+    while True:
+        # Train till current_valid_loss <= prev_valid_loss
+
+        # Begin Training
+        batch_index %= num_batches
+        start_index = batch_index*data_handler.batch_size
+
+        # total_steps is used for kld linear annealing
+        cross_entropy, kld, generated_recon_loss, z_loss, c_loss, kld_coeff = train_enc_gen(start_index,
                                                                                                 data_handler.batch_size,
                                                                                                 use_cuda, dropout,
                                                                                                 c_target=c, global_step=total_steps)
 
-            ce_loss_val = cross_entropy.data.cpu()[0]
-            kld_val = kld.data.cpu()[0]
-            gen_loss_val = generated_recon_loss.data.cpu()[0]
-            vae_loss_val = kld_val*kld_coeff+ce_loss_val
-            z_loss_val = z_loss.data.cpu()[0]
-            c_loss_val = c_loss.data.cpu()[0]
+        ce_loss_val = cross_entropy.data.cpu()[0]
+        kld_val = kld.data.cpu()[0]
+        gen_loss_val = generated_recon_loss.data.cpu()[0]
+        vae_loss_val = kld_val*kld_coeff+ce_loss_val
+        z_loss_val = z_loss.data.cpu()[0]
+        c_loss_val = c_loss.data.cpu()[0]
             
-            if total_steps % 100 == 0:
+        if total_steps % 100 == 0:
                 
-                print('\n')
-                print ('-----------Training-------------')
-                print ('Encoder-Generator Data')
-                print ('Epoch: %d Batch_Index: %d/%d' % (epoch+1, batch_index, num_batches))
-                print ('Enc-Gen Training Step: %d' % total_steps)
-                print ('Encoder Loss (VAE Loss): %f' % vae_loss_val)
-                print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (vae_loss_val+gen_loss_val))
-                print ('Generator z Loss: %f' % z_loss_val)
-                print ('Generator c Loss: %f' % c_loss_val)
-                print ('Cross Entropy: %f' % ce_loss_val)
-                print ('KLD: %f' % kld_val)
+            print ('\n')
+            print ('-----------Training-------------')
+            print ('Encoder-Generator Data')
+            print ('Batch_Index: %d/%d' % (batch_index, num_batches))
+            print ('Enc-Gen Training Step: %d' % total_steps)
+            print ('Encoder Loss (VAE Loss): %f' % vae_loss_val)
+            print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (vae_loss_val+gen_loss_val))
+            print ('Generator z Loss: %f' % z_loss_val)
+            print ('Generator c Loss: %f' % c_loss_val)
+            print ('Cross Entropy: %f' % ce_loss_val)
+            print ('KLD: %f' % kld_val)
                 
                 
-                summary_writer.add_scalar('train_enc_gen/encoder_loss', vae_loss_val, total_steps)
-                summary_writer.add_scalar('train_enc_gen/generator_loss', (vae_loss_val+gen_loss_val), total_steps)
-                summary_writer.add_scalar('train_enc_gen/generator_z_loss', z_loss_val, total_steps)
-                summary_writer.add_scalar('train_enc_gen/generator_c_loss', c_loss_val, total_steps)
-                summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
-                summary_writer.add_scalar('train_enc_gen/kld', kld_val, total_steps)
-                summary_writer.add_scalar('train_enc_gen/kld_coeff', kld_coeff)
+            summary_writer.add_scalar('train_enc_gen/encoder_loss', vae_loss_val, total_steps)
+            summary_writer.add_scalar('train_enc_gen/generator_loss', (vae_loss_val+gen_loss_val), total_steps)
+            summary_writer.add_scalar('train_enc_gen/generator_z_loss', z_loss_val, total_steps)
+            summary_writer.add_scalar('train_enc_gen/generator_c_loss', c_loss_val, total_steps)
+            summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
+            summary_writer.add_scalar('train_enc_gen/kld', kld_val, total_steps)
+            summary_writer.add_scalar('train_enc_gen/kld_coeff', kld_coeff)
 
 
-            if total_steps % 200 == 0:
+        #------Train step completed-------
 
-                # do validation
+        #------Do Validation-----------
 
-                # Enc-Gen Validation mode
-                cgn_model.prep_enc_gen_validation()
+        if total_steps % 200 == 0:
+
+            # do validation
+            
+            # Enc-Gen Validation mode
+            cgn_model.prep_enc_gen_validation()
                                 
-                valid_ce_val = 0
-                valid_kld_val = 0
-                valid_gen_loss_val = 0
-                valid_z_loss_val = 0
-                valid_c_loss_val = 0
+            valid_ce_val = 0
+            valid_kld_val = 0
+            valid_gen_loss_val = 0
+            valid_z_loss_val = 0
+            valid_c_loss_val = 0
 
-                num_valid_iterations = data_handler.gen_batch_loader.val_lines / data_handler.batch_size
-                valid_index = 0
+            num_valid_iterations = data_handler.gen_batch_loader.val_lines / data_handler.batch_size
+            valid_index = 0
 
-                for valid_step in range(num_valid_iterations):
+            for valid_step in range(num_valid_iterations):
                     
-                    valid_index = valid_step*data_handler.batch_size
+                valid_index = valid_step*data_handler.batch_size
                     
-                    # total_steps is used for kld annealing
-                    valid_cross_entropy, valid_kld, valid_generated_recon_loss, valid_z_loss, valid_c_loss, valid_kld_coeff = valid_enc_gen(valid_index,
-                                                                                                                                            data_handler.batch_size,
-                                                                                                                                            use_cuda, 0.0,
-                                                                                                                                            c_target=c, global_step=total_steps)
+                # total_steps is used for kld annealing
+                valid_cross_entropy, valid_kld, valid_generated_recon_loss, valid_z_loss, valid_c_loss, valid_kld_coeff = valid_enc_gen(valid_index,
+                                                                                                                                        data_handler.batch_size,
+                                                                                                                                        use_cuda, 0.0,
+                                                                                                                                        c_target=c, global_step=total_steps)
             
-                    valid_ce_val += valid_cross_entropy.data.cpu()[0]
-                    valid_kld_val += valid_kld.data.cpu()[0]
-                    valid_gen_loss_val += valid_generated_recon_loss.data.cpu()[0]
-                    valid_z_loss_val += valid_z_loss.data.cpu()[0]
-                    valid_c_loss_val += valid_c_loss.data.cpu()[0]
+                valid_ce_val += valid_cross_entropy.data.cpu()[0]
+                valid_kld_val += valid_kld.data.cpu()[0]
+                valid_gen_loss_val += valid_generated_recon_loss.data.cpu()[0]
+                valid_z_loss_val += valid_z_loss.data.cpu()[0]
+                valid_c_loss_val += valid_c_loss.data.cpu()[0]
 
-                valid_ce_val /= num_valid_iterations
-                valid_kld_val /= num_valid_iterations
-                valid_gen_loss_val /= num_valid_iterations
-                valid_z_loss_val /= num_valid_iterations
-                valid_c_loss_val /= num_valid_iterations
-                valid_vae_loss_val = valid_kld_val*valid_kld_coeff+valid_ce_val
+            valid_ce_val /= num_valid_iterations
+            valid_kld_val /= num_valid_iterations
+            valid_gen_loss_val /= num_valid_iterations
+            valid_z_loss_val /= num_valid_iterations
+            valid_c_loss_val /= num_valid_iterations
+            valid_vae_loss_val = valid_kld_val*valid_kld_coeff+valid_ce_val
 
-                print('\n')
-                print ('----------Validation--------------')
-                print ('Encoder-Generator Data')
-                print ('Epoch: %d Total Valid Batches%d' % (epoch+1, num_valid_iterations))
-                print ('Enc-Gen Current Step: %d' % total_steps)
-                print ('Encoder Loss (VAE Loss): %f' % valid_vae_loss_val)
-                print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (valid_vae_loss_val+valid_gen_loss_val))
-                print ('Generator z Loss: %f' % valid_z_loss_val)
-                print ('Generator c Loss: %f' % valid_c_loss_val)
-                print ('Cross Entropy: %f' % valid_ce_val)
-                print ('KLD: %f' % valid_kld_val)
+            print ('\n')
+            print ('----------Validation--------------')
+            print ('Encoder-Generator Data')
+            print ('Total Valid Batches%d' % (num_valid_iterations))
+            print ('Enc-Gen Current Step: %d' % total_steps)
+            print ('Encoder Loss (VAE Loss): %f' % valid_vae_loss_val)
+            print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (valid_vae_loss_val+valid_gen_loss_val))
+            print ('Generator z Loss: %f' % valid_z_loss_val)
+            print ('Generator c Loss: %f' % valid_c_loss_val)
+            print ('Cross Entropy: %f' % valid_ce_val)
+            print ('KLD: %f' % valid_kld_val)
                 
-                summary_writer.add_scalar('valid_enc_gen/encoder_loss', valid_vae_loss_val, total_steps)
-                summary_writer.add_scalar('valid_enc_gen/generator_loss', (valid_vae_loss_val+valid_gen_loss_val), total_steps)
-                summary_writer.add_scalar('valid_enc_gen/generator_z_loss', valid_z_loss_val, total_steps)
-                summary_writer.add_scalar('valid_enc_gen/generator_c_loss', valid_c_loss_val, total_steps)
-                summary_writer.add_scalar('valid_enc_gen/cross_entropy', valid_ce_val, total_steps)
-                summary_writer.add_scalar('valid_enc_gen/kld', valid_kld_val, total_steps)
-                summary_writer.add_scalar('valid_enc_gen/kld_coef', valid_kld_coeff, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/encoder_loss', valid_vae_loss_val, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/generator_loss', (valid_vae_loss_val+valid_gen_loss_val), total_steps)
+            summary_writer.add_scalar('valid_enc_gen/generator_z_loss', valid_z_loss_val, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/generator_c_loss', valid_c_loss_val, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/cross_entropy', valid_ce_val, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/kld', valid_kld_val, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/kld_coef', valid_kld_coeff, total_steps)
 
-                # Back to training mode
-                cgn_model.prep_enc_gen_training()
+            valid_current_loss = valid_vae_loss_val
                 
-            total_steps += 1
-            
-    return total_steps
+            # Back to training mode
+            cgn_model.prep_enc_gen_training()
 
-def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda, summary_writer, total_training_steps):
+            # Check validation loss
+            if (valid_current_loss > valid_prev_loss): 
+                break
+            else:
+                valid_prev_loss = valid_current_loss
+                
+        total_steps += 1
+        batch_index += 1
+
+    return total_steps, valid_prev_loss
+
+def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, use_cuda, summary_writer, total_training_steps, valid_prev_loss):
 
     """
     Trains the discriminator using both the labeled data and unlabedled data (from the generator). 
@@ -205,7 +222,7 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
     * data_handler: data_handler instance that manages all the data and batch preparation
     * num_epochs: The number of epochs for which the discriminator is trained in this sleep phase
     * use_cuda: cuda flag
-
+    * valid_disc_prev_loss: 
     """
 
     print 'Training Sentiment Discriminator. Total Gen-Disc Steps: %d' % total_training_steps         
@@ -218,76 +235,88 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
     cgn_model.prep_disc_training()
     sentiment_disc_train_step = cgn_model.discriminator_sentiment_trainer(data_handler, use_cuda)
     sentiment_disc_eval_step = cgn_model.discriminator_sentiment_valid(data_handler, use_cuda)
-    
-    for epoch in range(0, num_epochs):
 
-        for batch_index in range(num_train_batches):
+    batch_index = 0
+    while True:
 
-            generated_samples, generated_c = [], []
-            for ith_sample in range(number_of_gen_samples/gen_samples_batch_size):
-                gen_sample, gen_c = cgn_model.sample_generator_for_learning(data_handler, config, use_cuda, sample=gen_samples_batch_size)
-                generated_samples.extend(gen_sample)
-                generated_c.extend(gen_c)
+        # Train till valid_current_loss <= valid_prev_loss
+        batch_index %= num_train_batches
+        
+        generated_samples, generated_c = [], []
+        for ith_sample in range(number_of_gen_samples/gen_samples_batch_size):
+            gen_sample, gen_c = cgn_model.sample_generator_for_learning(data_handler, config, use_cuda, sample=gen_samples_batch_size)
+            generated_samples.extend(gen_sample)
+            generated_c.extend(gen_c)
 
-            generated_c = t.stack(generated_c, dim=0)
-            total_loss, batch_train_ce_loss, generated_loss, generated_loss_ce, emperical_shannon_entropy = sentiment_disc_train_step(generated_samples, generated_c, batch_index)
+        generated_c = t.stack(generated_c, dim=0)
+        total_loss, batch_train_ce_loss, generated_loss, generated_loss_ce, emperical_shannon_entropy = sentiment_disc_train_step(generated_samples, generated_c, batch_index)
 
-            loss_val = total_loss.data.cpu()[0]
-            train_ce_loss_val = batch_train_ce_loss.data.cpu()[0]
-            generated_loss_val = generated_loss.data.cpu()[0]
-            generated_loss_ce_val = generated_loss_ce.data.cpu()[0]
-            ese_loss_val = emperical_shannon_entropy.data.cpu()[0]
+        loss_val = total_loss.data.cpu()[0]
+        train_ce_loss_val = batch_train_ce_loss.data.cpu()[0]
+        generated_loss_val = generated_loss.data.cpu()[0]
+        generated_loss_ce_val = generated_loss_ce.data.cpu()[0]
+        ese_loss_val = emperical_shannon_entropy.data.cpu()[0]
                         
-            if total_training_steps % 5 == 0:
+        if total_training_steps % 5 == 0:
                 
-                print('\n')
-                print ('------------------------')
-                print ('Discriminator Training')
-                print ('Epoch: %d Batch: %d/%d' % (epoch+1, batch_index, num_train_batches))
-                print ('Total Training Steps: %d' % total_training_steps)
-                print ('Batch loss: %f' % loss_val)
-                print ('Labeled cross entropy: %f' % train_ce_loss_val)
-                print ('Generated cross entropy: %f' % generated_loss_ce_val)
-                print ('Generated emperical_shannon_entropy: %f' % ese_loss_val)
-                print ('Loss from generated data as input (generated_ce + beta*emperical shannon entropy): %f' % generated_loss_val)
+            print('\n')
+            print ('------------------------')
+            print ('Discriminator Training')
+            print ('Batch: %d/%d' % (batch_index, num_train_batches))
+            print ('Total Training Steps: %d' % total_training_steps)
+            print ('Batch loss: %f' % loss_val)
+            print ('Labeled cross entropy: %f' % train_ce_loss_val)
+            print ('Generated cross entropy: %f' % generated_loss_ce_val)
+            print ('Generated emperical_shannon_entropy: %f' % ese_loss_val)
+            print ('Loss from generated data as input (generated_ce + beta*emperical shannon entropy): %f' % generated_loss_val)
                 
-                summary_writer.add_scalar('train_discriminator/total_loss', loss_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator/labeled_cross_entropy', train_ce_loss_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator/generated_total_loss', generated_loss_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator/generated_cross_entropy', generated_loss_ce_val, total_training_steps)
-                summary_writer.add_scalar('train_discriminator/generated_emperical_shannon', ese_loss_val, total_training_steps)
+            summary_writer.add_scalar('train_discriminator/total_loss', loss_val, total_training_steps)
+            summary_writer.add_scalar('train_discriminator/labeled_cross_entropy', train_ce_loss_val, total_training_steps)
+            summary_writer.add_scalar('train_discriminator/generated_total_loss', generated_loss_val, total_training_steps)
+            summary_writer.add_scalar('train_discriminator/generated_cross_entropy', generated_loss_ce_val, total_training_steps)
+            summary_writer.add_scalar('train_discriminator/generated_emperical_shannon', ese_loss_val, total_training_steps)
+        
+        # -------Training step completed-------
+        # ------------Do Validation------------
+        if total_training_steps % 10 == 0:
+            # Do Validation
+            
+            # Discriminator validation mode
+            cgn_model.prep_disc_validation()
 
-            if total_training_steps % 10 == 0:
-                # Do Validation
+            valid_ce_loss_val = 0
+            for valid_index in range(num_valid_batches):
+                valid_ce = sentiment_disc_eval_step(valid_index)
+                valid_ce_loss_val += valid_ce.data.cpu()[0]
+
+            valid_ce_loss_val /= num_valid_batches
                 
-                # Discriminator validation mode
-                cgn_model.prep_disc_validation()
-
-                valid_ce_loss_val = 0
-                for valid_index in range(num_valid_batches):
-                    valid_ce = sentiment_disc_eval_step(valid_index)
-                    valid_ce_loss_val += valid_ce.data.cpu()[0]
-
-                valid_ce_loss_val /= num_valid_batches
-
-                print('\n')
-                print ('------------------------')
-                print ('Discriminator Validation')
-                print ('Epoch: %d Batch: %d/%d' % (epoch+1, batch_index, num_train_batches))
-                print ('Total Training Steps: %d' % total_training_steps)
-                print ('Validation Loss: %f' % valid_ce_loss_val)
+            print('\n')
+            print ('------------------------')
+            print ('Discriminator Validation')
+            print ('Batch: %d/%d' % (batch_index, num_train_batches))
+            print ('Total Training Steps: %d' % total_training_steps)
+            print ('Validation Loss: %f' % valid_ce_loss_val)
                                 
-                summary_writer.add_scalar('valid_discriminator/labeled_cross_entropy', valid_ce_loss_val, total_training_steps)
-                
-                # Discriminator training mode back on
-                cgn_model.prep_disc_training()
-                
-            total_training_steps += 1
+            summary_writer.add_scalar('valid_discriminator/labeled_cross_entropy', valid_ce_loss_val, total_training_steps)
 
-        epoch += 1
+            valid_current_loss = valid_ce_loss_val
 
+            if (valid_current_loss > valid_prev_loss):
+                break
+            else:
+                valid_prev_loss = valid_current_loss
+                
+            # Discriminator training mode back on
+            cgn_model.prep_disc_training()
+
+        # ------Validation completed------
+        
+        total_training_steps += 1
+        batch_index += 1
+    
     # step helps keep track of generator-discriminator alternating iterations
-    return total_training_steps
+    return total_training_steps, valid_prev_loss
 
 def main():
 
@@ -353,7 +382,7 @@ def main():
         
     if train_initial_rvae:
 
-        summary_dir = ROOT_DIR+'snapshot/run_initial/'
+        summary_dir = ROOT_DIR+'snapshot/run_initial_update/'
         summary_writer = SummaryWriter(summary_dir)
 
         start_iteration = 0
@@ -371,6 +400,9 @@ def main():
         #num_line = num_line - num_line % args.batch_size
         print 'Begin Step 1. Initial VAE Training'
 
+        # Sets train mode for enc-gen
+        cgn_model.prep_enc_gen_training()
+        
         for iteration in range(start_iteration, args.rvae_initial_iterations):
 
             start_index = (start_index+args.batch_size)%train_lines
@@ -398,6 +430,9 @@ def main():
             if iteration % 500 == 0:
                 # do validation
 
+                # Validation mode. Calls .eval() on modules
+                cgn_model.prep_enc_gen_validation()
+                
                 valid_ce_val = 0
                 valid_kld_val = 0
                 valid_total_loss_val = 0
@@ -431,8 +466,11 @@ def main():
                 summary_writer.add_scalar('valid_initial_rvae/cross_entropy', valid_ce_val, iteration)                
                 summary_writer.add_scalar('valid_initial_rvae/total_loss', valid_total_loss_val, iteration)
 
-            if (iteration+1) % 10000 == 0:
-                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, ('initial_rvae_%d'%(iteration+1))))
+                # Back to training mode
+                cgn_model.prep_enc_gen_training()
+                
+            if (iteration+1) % 20000 == 0:
+                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, ('initial_rvae_updated_%d'%(iteration+1))))
 
     elif (args.load_cgn) :
 
@@ -465,13 +503,19 @@ def main():
         total_discriminator_steps = 0
         total_generator_steps = 0
 
+        valid_enc_gen_prev_loss = float('inf')
+        valid_disc_prev_loss = float('inf')
+        
         for i in range(args.total_alternating_iterations):
             
-            total_discriminator_steps = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, \
-                                                                      args.use_cuda, summary_writer, total_discriminator_steps)
+            total_discriminator_steps, valid_disc_prev_loss = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, \
+                                                                                            args.use_cuda, summary_writer, total_discriminator_steps, \
+                                                                                            valid_disc_prev_loss)
             
-            total_generator_steps = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs, \
-                                                          args.use_cuda, args.dropout, summary_writer, total_generator_steps)
+            total_generator_steps, valid_enc_gen_prev_loss = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs, \
+                                                                                   args.use_cuda, args.dropout, summary_writer, \
+                                                                                   total_generator_steps, valid_enc_gen_prev_loss)
+            
 
             if (i) % 2 == 0:
                 t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
