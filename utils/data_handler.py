@@ -46,7 +46,7 @@ class DataHandler:
         self.dev_sentiment_size = 2 * self.sentiment_total_size // 3
 
         self.num_train_sentiment_batches = self.train_sentiment_size / self.batch_size
-        self.num_dev_batches = self.dev_sentiment_size / self.batch_size
+        self.num_dev_sentiment_batches = self.dev_sentiment_size / self.batch_size
 
         print 'Total Sentiment size: %d' % self.sentiment_total_size
         print 'Train sentiment size: %d' % self.train_sentiment_size
@@ -62,7 +62,7 @@ class DataHandler:
 
         # This has both train and dev data
         self.sentiment_discriminator_X = [list(map(self.gen_batch_loader.word_to_idx.get, line)) for line in data_words]
-        #self.sentiment_discriminator_Y = self.sentiment_discriminator_Y
+        self.sentiment_discriminator_Y = map(int, self.sentiment_discriminator_Y)
 
     def get_sentiment_train_batch(self, batch_index):
 
@@ -72,6 +72,15 @@ class DataHandler:
         batch_train_Y = [self.sentiment_discriminator_Y[self.sentiment_train_indices[x]] for x in batch_indices]
         
         return batch_train_X, batch_train_Y
+
+    def get_sentiment_dev_batch(self, batch_index):
+
+        batch_indices = np.arange(batch_index*self.batch_size, (batch_index+1)*self.batch_size)
+
+        batch_dev_X = [self.sentiment_discriminator_X[self.sentiment_dev_indices[x]] for x in batch_indices]
+        batch_dev_Y = [self.sentiment_discriminator_Y[self.sentiment_dev_indices[x]] for x in batch_indices]
+
+        return batch_dev_X, batch_dev_Y
 
     def create_sentiment_batch(self, x_dg):
 
@@ -118,26 +127,7 @@ class DataHandler:
         
         return x_gen
 
-    # Change this function for tensor stack like above
-    def get_sentiment_dev_batch(self, batch_index):
-
-        batch_indices = np.arange(batch_index*self.batch_size, (batch_index+1)*self.batch_size)
-
-        batch_dev_X = [self.sentiment_discriminator_X[self.sentiment_dev_indices[batch_indices]]]
-        batch_dev_Y = [self.sentiment_discriminator_Y[self.sentiment_dev_indices[batch_indices]]]
-
-        # get batch sentence len
-        batch_sentence_len = [len(sentence) for sentence in batch_dev_X]
-        max_seq_len = np.amax(batch_sentence_len)
-
-        for i, line in enumerate(batch_dev_X):
-            line_len = batch_sentence_len[i]
-            to_add = max_seq_len - line_len
-            batch_dev_X[i] = line + [self.gen_batch_loader.word_to_idx[self.gen_batch_loader.pad_token]] * to_add
-
-        batch_dev_X = np.array(batch_dev_X)
-        batch_dev_Y = np.array(batch_dev_Y)
-            
+                
     def feature_from_indices(self, x):
         """
         Get one-hot vector for x

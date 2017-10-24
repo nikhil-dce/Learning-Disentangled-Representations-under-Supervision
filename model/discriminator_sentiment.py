@@ -47,15 +47,11 @@ class Sentiment_CNN(nn.Module):
 
         self.dropout = nn.Dropout(config.sentiment_dropout)
         self.fc1 = nn.Linear(len(Ks)*Co, C)
-        self.pass_gradient = False
-
+        
     def conv_and_pool(self, x, conv):
         x = F.relu(conv(x)).squeeze(3) #(N,Co,W)
         x = F.max_pool1d(x, x.size(2)).squeeze(2)
         return x
-
-    def set_pass_gradient_to_generator(self, pass_gradient):
-        self.pass_gradient = pass_gradient
         
     def forward(self, x):
 

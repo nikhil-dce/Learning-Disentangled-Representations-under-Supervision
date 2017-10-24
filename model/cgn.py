@@ -43,6 +43,23 @@ class Controlled_Generation_Sentence(nn.Module):
         self.sentiment_discriminator_autograd = [1 if param.requires_grad else 0 for param in self.sentiment_discriminator.parameters()]
 
 
+    def compute_mahalabonis(self, mu1, mu2, std1, std2):
+        
+        std = (std1 + std2) / 2 
+        delta_mu = mu1 - mu2
+
+        #det_std1_sqr = t.sum(std1 * std1, 1)
+        #det_std2_sqr = t.sum(std2 * std2, 1)
+        #det_std_sqr = t.sum(std*std, 1)
+
+        #print det_std_sqr.size()
+        #print det_std1_sqr.size()
+        
+        distance = t.sum(delta_mu * t.reciprocal(std) * delta_mu, 1)
+        #distance = 1/8*distance
+        #distance += 1/4 * t.log(det_std_sqr) - 1/8 * t.log(det_std1_sqr * det_std2_sqr) 
+        return distance
+    
     def encode_for_z (self, encoder_input, batch_size, use_cuda):
         """
         Given encoder_input computes the z
@@ -94,21 +111,19 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return out, final_state, kld, mu, std, z
 
-    def discriminator_forward_function (self, data_handler, use_cuda, pass_gradient_to_generator):
+    def discriminator_forward_function (self, data_handler, use_cuda):
         """
         Discriminator forward function
         
         Parameters:
         * data_handler: gen_batch_loader from data_handler
         * use_cuda: cuda flag
-        * pass_gradient_to_generator: pass gradient back to generator
         * batch_size: batch size for forward prop. This can be higher than generator batch.
 
         Returns:
         * Discriminator forward step function
         """
         
-        self.sentiment_discriminator.set_pass_gradient_to_generator(pass_gradient_to_generator)
         self.sentiment_discriminator.eval()
         
         def discriminator_forward(start_index, batch_size):
@@ -146,7 +161,52 @@ class Controlled_Generation_Sentence(nn.Module):
             return c.data
             
         return discriminator_forward
+
+
+    def discriminator_sentiment_valid (self, data_handler, use_cuda):
+
+        """
+        Initializes the step function for discriminator validation
         
+        Parameters:
+        * data_handler: data handler for discriminator labeled data
+        * use_cuda: cuda flag
+
+        Returns:
+        * Discriminator Valid step function
+        """
+                               
+        def valid (batch_index):
+
+            # Handles dropouts at validation
+            self.sentiment_discriminator.eval()
+            
+            # Get labeled training data from the dataset 
+            batch_train_X, batch_train_Y = data_handler.get_sentiment_dev_batch(batch_index)
+            
+            batch_train_X = Variable(data_handler.create_sentiment_batch(batch_train_X))
+            batch_train_Y = t.from_numpy(np.array(batch_train_Y))
+            batch_train_Y = Variable(batch_train_Y.long())
+                                    
+            #--------------
+            # Labeled Data
+
+            batch_size = batch_train_X.size(0)
+                        
+            # Torch tensors
+            if use_cuda:
+                batch_train_X = batch_train_X.cuda()
+                batch_train_Y = batch_train_Y.cuda()
+
+            batch_train_X = self.embedding.word_embed(batch_train_X)
+            logit = self.sentiment_discriminator(batch_train_X)
+
+            batch_train_ce_loss = F.cross_entropy(logit, batch_train_Y)
+            
+            return batch_train_ce_loss
+
+        return valid
+    
     def discriminator_sentiment_trainer (self, data_handler, use_cuda):
 
         """
@@ -190,6 +250,8 @@ class Controlled_Generation_Sentence(nn.Module):
             batch_train_X = Variable(data_handler.create_sentiment_batch(batch_train_X))
             batch_generated_X = Variable(data_handler.create_sentiment_batch(generated_samples))
 
+            #batch_train_Y = np.array(batch_train_Y)
+            #batch_train_Y = batch_train_Y.reshape(batch_train_Y.shape[0], 1)
             batch_train_Y = t.from_numpy(np.array(batch_train_Y))
             batch_train_Y = Variable(batch_train_Y.long())
             batch_generated_Y = generated_c.view(-1)
@@ -280,7 +342,47 @@ class Controlled_Generation_Sentence(nn.Module):
 
         return train
 
-    def train_encoder_generator(self, data_handler):
+
+    def prep_disc_validation(self):
+
+        """
+        Call prep functions before retrieving the step (train/valid) functions
+        Otherwise optimizer would not update the weights
+        """
+        
+        # Valid Mode for all modules
+        self.discriminator_mode(train_mode=False)
+        self.encoder_mode(train_mode=False)
+        self.generator_mode(train_mode=False)
+
+        # Already being set in train-encoder-generator 
+        self.sentiment_discriminator.eval()
+        self.encoder.eval()
+        self.generator.eval()
+
+    def prep_disc_training(self):
+
+        # Valid Mode for all modules
+        self.discriminator_mode(train_mode=True)
+        self.encoder_mode(train_mode=False)
+        self.generator_mode(train_mode=False)
+
+        # Already being set in train-encoder-generator 
+        self.sentiment_discriminator.train()
+        self.encoder.eval()
+        self.generator.eval()
+
+    def prep_enc_gen_validation(self):
+
+        self.encoder_mode(train_mode=False)
+        self.generator_mode(train_mode=False)
+        self.discriminator_mode(train_mode=False)
+
+        self.encoder.eval()
+        self.generator.eval()
+        self.sentiment_discriminator.eval()
+
+    def prep_enc_gen_training(self):
 
         # Train Mode off for discriminator
         self.discriminator_mode(train_mode=False)
@@ -292,6 +394,90 @@ class Controlled_Generation_Sentence(nn.Module):
         self.encoder.train()
         self.generator.train()
         
+    def valid_encoder_generator(self, data_handler):
+        
+        def valid(start_index, batch_size, use_cuda, dropout, c_target, global_step):
+
+            c_target = c_target[start_index:start_index+batch_size]
+
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'valid', start_index)
+            input = [Variable(t.from_numpy(var)) for var in input]
+            input = [var.long() for var in input]
+            input = [var.cuda() if use_cuda else var for var in input]
+
+            [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
+            
+            #--------------
+                
+            [batch_size, _] = encoder_word_input.size()
+            encoder_input = self.embedding(encoder_word_input, encoder_character_input)
+
+            z_out, std, logvar, mu = self.encode_for_z(encoder_input, batch_size, use_cuda)
+
+            # Detach the z from the exising graph
+            z = Variable(z_out.data, requires_grad=True)
+            
+            c = Variable(c_target, requires_grad=False)
+            if use_cuda:
+                c = c.cuda()
+
+            kld_coeff = kld_coef(global_step, extended=True)
+            kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
+
+            c = c.view(c.size(0), 1)
+
+            input_code = t.cat((z,c), 1)
+            generator_input = self.embedding.word_embed(gen_word_input)
+            logits, _ = self.generator(generator_input, input_code, dropout, None)
+            
+            # --------------
+            
+            logits = logits.view(-1, self.config.word_vocab_size)
+            target = target.view(-1)
+            
+            # cross_entropy = F.cross_entropy(logits, target)
+            log_softmax = F.log_softmax(logits)
+            total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
+            cross_entropy = 80 * total_batch_loss / batch_size
+
+            # -------------
+            
+            # use this for z and z_reconstruction loss
+            softmax_output = t.exp(log_softmax)
+            
+            # both are vairables here
+            out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight)
+            out_embedding = out_embedding.view(batch_size, -1, out_embedding.size(1))[:,:-1,:]
+
+            # use this out_embedding for forward pass to get z loss
+            # use this out_mebedding for forward pass to get cross_entropy for c
+
+            # Generator loss using discriminator
+            c_reconstructed = self.sentiment_discriminator(out_embedding)
+            
+            # c_target = c_target.long()
+            c = c.long()
+            c_loss = F.cross_entropy(c_reconstructed, c.view(-1))
+
+            # Generator loss using encoder
+            encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
+            encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
+
+            # Should i use mu and logvar l2 here? 
+            z_recon, std_recon, _, mu_recon = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)            
+            
+            mahalabonis_distance = self.compute_mahalabonis(mu, mu_recon, std, std_recon)
+            z_loss = t.sum(mahalabonis_distance)/batch_size
+            
+            total_reconstruction_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
+            
+            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff
+
+        return valid
+
+    
+    def train_encoder_generator(self, data_handler):
+
         # Two optimizers
         encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
         generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
@@ -323,9 +509,9 @@ class Controlled_Generation_Sentence(nn.Module):
             [batch_size, _] = encoder_word_input.size()
             encoder_input = self.embedding(encoder_word_input, encoder_character_input)
 
-            z_out, std, logvar, mu = self.encode_for_z(encoder_input, batch_size, use_cuda)
+            z_out, std_out, logvar_out, mu_out = self.encode_for_z(encoder_input, batch_size, use_cuda)
 
-            # Detach the z from the exising graph
+            # Detach the z from the existing graph
             z = Variable(z_out.data, requires_grad=True)
             
             c = Variable(c_target, requires_grad=False)
@@ -333,7 +519,7 @@ class Controlled_Generation_Sentence(nn.Module):
                 c = c.cuda()
 
             kld_coeff = kld_coef(global_step, extended=True)
-            kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
+            kld = (-0.5 * t.sum(logvar_out - t.pow(mu_out,2) - t.exp(logvar_out) + 1, 1)).mean().squeeze()
 
             c = c.view(c.size(0), 1)
 
@@ -391,14 +577,23 @@ class Controlled_Generation_Sentence(nn.Module):
             encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
             encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
             
-            z_reconstructed, _, _, _ = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)            
-            l2_loss= z-z_reconstructed
-                        
+            z_recon, std_recon, _, mu_recon = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)
+
+            # Create new mu, and std fro mu_out and std_out
+            # To avoid calculating gradient wrt mu_out and std_out when calculating mahalabonis_distance
+            mu = Variable(mu_out.data, requires_grad=False)
+            std = Variable(std_out.data, requires_grad=False)
+            mahalabonis_distance = self.compute_mahalabonis(mu, mu_recon, std, std_recon)
+
+            """
+            l2_loss= z-z_recon
             l2_loss = l2_loss*l2_loss
             l2_loss = t.sum(l2_loss, dim=1)
-
-            z_loss = t.sum(t.sqrt(l2_loss))/batch_size
             
+            z_loss = t.sum(t.sqrt(l2_loss))/batch_size
+            """
+
+            z_loss = t.sum(mahalabonis_distance)/batch_size
             total_reconstruction_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
             total_reconstruction_loss.backward()
             generator_optimizer.step()
@@ -479,6 +674,7 @@ class Controlled_Generation_Sentence(nn.Module):
     def initial_rvae_valid(self, data_handler):
 
         # Should remove the dropout scaling
+        # TODO: Do this inside the valid function
         self.encoder.eval()
         self.generator.eval()
         
