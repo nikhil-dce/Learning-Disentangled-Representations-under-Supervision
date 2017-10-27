@@ -52,6 +52,8 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
 
     #-------------------Get codewords from the current state of discriminator-------- 
 
+    print ('\n')
+    print ('Getting c using current state of discriminator')
     batch_size = 500
     discriminator_forward = cgn_model.discriminator_forward_function (data_handler, use_cuda)
         
@@ -85,11 +87,13 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
     num_batches = train_line / data_handler.batch_size
 
     cgn_model.prep_enc_gen_training()
-    train_enc_gen = cgn_model.train_encoder_generator(data_handler)
+    train_enc_gen = cgn_model.train_encoder_generator(data_handler, summary_writer)
     valid_enc_gen = cgn_model.valid_encoder_generator(data_handler)
 
     batch_index = 0
-    while True:
+    current_iteration_steps = 0
+    while current_iteration_steps < 12400:
+        current_iteration_steps += 1
         # Train till current_valid_loss <= prev_valid_loss
 
         # Begin Training
@@ -97,10 +101,11 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
         start_index = batch_index*data_handler.batch_size
 
         # total_steps is used for kld linear annealing
-        cross_entropy, kld, generated_recon_loss, z_loss, c_loss, kld_coeff = train_enc_gen(start_index,
+        cross_entropy, kld, generated_recon_loss, z_loss, c_loss, kld_coeff, temp_coef = train_enc_gen(start_index,
                                                                                                 data_handler.batch_size,
                                                                                                 use_cuda, dropout,
-                                                                                                c_target=c, global_step=total_steps)
+                                                                                                c_target=c, global_step=total_steps,
+                                                                                                calc_z_loss=True)
 
         ce_loss_val = cross_entropy.data.cpu()[0]
         kld_val = kld.data.cpu()[0]
@@ -109,7 +114,7 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
         z_loss_val = z_loss.data.cpu()[0]
         c_loss_val = c_loss.data.cpu()[0]
             
-        if total_steps % 100 == 0:
+        if total_steps % 60 == 0:
                 
             print ('\n')
             print ('-----------Training-------------')
@@ -130,14 +135,14 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             summary_writer.add_scalar('train_enc_gen/generator_c_loss', c_loss_val, total_steps)
             summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
             summary_writer.add_scalar('train_enc_gen/kld', kld_val, total_steps)
-            summary_writer.add_scalar('train_enc_gen/kld_coeff', kld_coeff)
-
+            summary_writer.add_scalar('train_enc_gen/kld_coeff', kld_coeff, total_steps)
+            summary_writer.add_scalar('train_enc_gen/temp_coef', temp_coef, total_steps)
 
         #------Train step completed-------
 
         #------Do Validation-----------
-
-        if total_steps % 200 == 0:
+    
+        if total_steps % 1000 == 0:
 
             # do validation
             
@@ -158,10 +163,11 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                 valid_index = valid_step*data_handler.batch_size
                     
                 # total_steps is used for kld annealing
-                valid_cross_entropy, valid_kld, valid_generated_recon_loss, valid_z_loss, valid_c_loss, valid_kld_coeff = valid_enc_gen(valid_index,
+                valid_cross_entropy, valid_kld, valid_generated_recon_loss, valid_z_loss, valid_c_loss, valid_kld_coeff, valid_temp_coeff = valid_enc_gen(valid_index,
                                                                                                                                         data_handler.batch_size,
-                                                                                                                                        use_cuda, 0.0,
-                                                                                                                                        c_target=c, global_step=total_steps)
+                                                                                                                                        use_cuda, c_target=c,
+                                                                                                                                        global_step=total_steps,
+                                                                                                                                        calc_z_loss=True)
             
                 valid_ce_val += valid_cross_entropy.data.cpu()[0]
                 valid_kld_val += valid_kld.data.cpu()[0]
@@ -195,18 +201,14 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             summary_writer.add_scalar('valid_enc_gen/cross_entropy', valid_ce_val, total_steps)
             summary_writer.add_scalar('valid_enc_gen/kld', valid_kld_val, total_steps)
             summary_writer.add_scalar('valid_enc_gen/kld_coef', valid_kld_coeff, total_steps)
-
-            valid_current_loss = valid_vae_loss_val
+            summary_writer.add_scalar('train_enc_gen/temp_coef', valid_temp_coeff, total_steps) 
+            #valid_current_loss = 2*valid_vae_loss_val + valid_gen_loss_val
                 
             # Back to training mode
             cgn_model.prep_enc_gen_training()
-
-            # Check validation loss
-            if (valid_current_loss > valid_prev_loss): 
-                break
-            else:
-                valid_prev_loss = valid_current_loss
-                
+            
+       
+        
         total_steps += 1
         batch_index += 1
 
@@ -278,7 +280,8 @@ def train_sentiment_discriminator(cgn_model, config, data_handler, num_epochs, u
         
         # -------Training step completed-------
         # ------------Do Validation------------
-        if total_training_steps % 10 == 0:
+        
+        if total_training_steps % 40 == 0:
             # Do Validation
             
             # Discriminator validation mode
@@ -342,10 +345,16 @@ def main():
     parser.add_argument('--train-cgn-model', type=bool, default=False)
     parser.add_argument('--lambda-z', type=float, default=0.1, help='Z Reconstruction Generator Loss Coeff (Default=0.1)')
     parser.add_argument('--lambda-u', type=float, default=0.1, help='C Reconstruction for Generated Data (Sleep phase) Discriminator Loss Coeff (Default=0.1)')
-    parser.add_argument('--lambda-c', type=float, default=0.1, help='C Reconstruction Generator Loss Coeff (Default=0.1)')
-    parser.add_argument('--beta', type=float, default=1, help='Normalizing Coeff for entropy')
+    parser.add_argument('--lambda-c', type=float, default=10, help='C Reconstruction Generator Loss Coeff (Default=10)')
+    parser.add_argument('--beta', type=float, default=1, help='Normalizing Coeff for entropy used in Discriminator Loss')
+    parser.add_argument('--logdir', type=str, help='Relative path of log dir')
+    
     args = parser.parse_args()
 
+    if not args.logdir and args.train_cgn_model:
+        print 'Please enter the log-dir name'
+        sys.exit()
+    
     if not os.path.exists(args.embedding_path):
         raise IOError("Word Embedding file cannot be read")
 
@@ -472,7 +481,7 @@ def main():
             if (iteration+1) % 20000 == 0:
                 t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, ('initial_rvae_updated_%d'%(iteration+1))))
 
-    elif (args.load_cgn) :
+    elif (args.load_cgn and args.sample_generator) :
 
         # load cgn model and sample
         cgn_model.load_state_dict(t.load(args.load_cgn))
@@ -490,36 +499,50 @@ def main():
         
     elif (args.train_cgn_model):
 
-        summary_dir = ROOT_DIR+'snapshot/train_cgn_logs/'
+        summary_dir = ROOT_DIR+'snapshot/'+args.logdir
         summary_writer = SummaryWriter(summary_dir)
-        #summary_writer = SummaryWriter(ROOT_DIR+'snapshot/run_random_logs/')
-        
-        # Load pretrained
-        cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
 
-        # Load discriminator labelled data
-        data_handler.load_discriminator(args.sentiment_discriminator_train_file)
+        #summary_dir = ROOT_DIR+'snapshot/run_random_logs/'
+        #summary_writer = SummaryWriter(ROOT_DIR+'snapshot/run_random_logs/')
+        print summary_dir
+
 
         total_discriminator_steps = 0
         total_generator_steps = 0
 
         valid_enc_gen_prev_loss = float('inf')
         valid_disc_prev_loss = float('inf')
+        skip_first_disc_training = False
+
+        # Load discriminator labelled data
+        data_handler.load_discriminator(args.sentiment_discriminator_train_file)
         
-        for i in range(args.total_alternating_iterations):
-            
+        # Load pretrained
+        if args.preload_initial_rvae:
+            cgn_model.load_state_dict(t.load(args.preload_initial_rvae))
+            print 'Preload initial rvae'
             total_discriminator_steps, valid_disc_prev_loss = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, \
                                                                                             args.use_cuda, summary_writer, total_discriminator_steps, \
                                                                                             valid_disc_prev_loss)
-            
+            t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model_experiment_'+args.logdir+"_disc_pretrained"))
+
+        elif args.load_cgn:
+            cgn_model.load_state_dict(t.load(args.load_cgn))
+            print 'CGN Loaded: ' + args.load_cgn
+                
+        for i in range(args.total_alternating_iterations):
+                                            
             total_generator_steps, valid_enc_gen_prev_loss = train_encoder_decoder(cgn_model, config, data_handler, args.generator_epochs, \
                                                                                    args.use_cuda, args.dropout, summary_writer, \
                                                                                    total_generator_steps, valid_enc_gen_prev_loss)
             
 
-            if (i) % 2 == 0:
-                t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model'))
-                summary_writer.export_scalars_to_json(summary_dir+"all_scalars.json")
+            total_discriminator_steps, valid_disc_prev_loss = train_sentiment_discriminator(cgn_model, config, data_handler, args.discriminator_epochs, \
+                                                                                            args.use_cuda, summary_writer, total_discriminator_steps, \
+                                                                                            valid_disc_prev_loss)
+
+            #if (i) % 2 == 0:
+            t.save(cgn_model.state_dict(), os.path.join(args.save_model_dir, 'cgn_model_experiment_'+args.logdir))
                 
     else:
 

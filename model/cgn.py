@@ -17,6 +17,7 @@ from utils.beam_search import Beam
 from .discriminator_sentiment import Sentiment_CNN
 
 from utils.functional import kld_coef
+from utils.functional import temp_coef
 
 import sys
 
@@ -55,7 +56,7 @@ class Controlled_Generation_Sentence(nn.Module):
         #print det_std_sqr.size()
         #print det_std1_sqr.size()
         
-        distance = t.sum(delta_mu * t.reciprocal(std) * delta_mu, 1)
+        distance = t.sqrt(t.sum(delta_mu * t.reciprocal(std) * delta_mu, 1))
         #distance = 1/8*distance
         #distance += 1/4 * t.log(det_std_sqr) - 1/8 * t.log(det_std1_sqr * det_std2_sqr) 
         return distance
@@ -258,20 +259,6 @@ class Controlled_Generation_Sentence(nn.Module):
             batch_generated_Y = batch_generated_Y.long()
             batch_generated_Y = Variable(batch_generated_Y)
             
-            '''
-            batch_train_X.extend(generated_samples)
-
-            batch_train_X = data_handler.create_sentiment_batch(batch_train_X)
-            batch_train_X = Variable(batch_train_X)
-            batch_train_Y = t.from_numpy(np.array(batch_train_Y))
-            #batch_train_Y = batch_train_Y.view(batch_train_Y.size(0), 1)
-
-            generated_c = generated_c.view(-1)
-            batch_train_Y = batch_train_Y.long()
-            generated_c = generated_c.long()
-            batch_train_Y = t.cat((batch_train_Y, generated_c) ,dim=0)
-            batch_train_Y = Variable(batch_train_Y)
-            '''
             #--------------
             # Labeled Data
 
@@ -286,14 +273,6 @@ class Controlled_Generation_Sentence(nn.Module):
             logit = self.sentiment_discriminator(batch_train_X)
 
             batch_train_ce_loss = F.cross_entropy(logit, batch_train_Y)
-
-            '''
-            # equivalent to loss = F.cross_entropy(logit, target)
-            log_softmax = F.log_softmax(logit)
-            total_batch_loss = F.nll_loss(log_softmax, batch_train_Y, size_average=False)
-            cross_entropy = total_batch_loss / data_handler.batch_size
-            softmax = t.exp(log_softmax)
-            '''
 
             #------------
             # Loss from generated data
@@ -325,16 +304,6 @@ class Controlled_Generation_Sentence(nn.Module):
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
-            
-            '''
-            # TODO: Make entropy calculation generic for all generated_c.
-            emperical_shannon_entropy = t.neg(t.mean(t.sum(softmax * log_softmax, 1)))
-            
-            optimizer.zero_grad()
-            loss = cross_entropy + emperical_shannon_entropy
-            loss.backward()
-            optimizer.step()
-            '''
             
             # return the total_batch_loss
             # can be used to calculate the total epoch loss
@@ -396,9 +365,10 @@ class Controlled_Generation_Sentence(nn.Module):
         
     def valid_encoder_generator(self, data_handler):
         
-        def valid(start_index, batch_size, use_cuda, c_target, global_step):
+        def valid(start_index, batch_size, use_cuda, c_target, global_step, calc_z_loss = True):
 
-            c_target = c_target[start_index:start_index+batch_size]
+            valid_index = start_index + data_handler.gen_batch_loader.train_lines
+            c_target = c_target[valid_index:valid_index+batch_size]
 
             input = data_handler.gen_batch_loader.next_batch(batch_size, 'valid', start_index)
             input = [Variable(t.from_numpy(var)) for var in input]
@@ -408,22 +378,23 @@ class Controlled_Generation_Sentence(nn.Module):
             [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
             
             #--------------
-                
+
             [batch_size, _] = encoder_word_input.size()
             encoder_input = self.embedding(encoder_word_input, encoder_character_input)
 
-            z_out, std, logvar, mu = self.encode_for_z(encoder_input, batch_size, use_cuda)
+            z_out, std_out, logvar_out, mu_out = self.encode_for_z (encoder_input, batch_size, use_cuda)
 
-            # Detach the z from the exising graph
             z = Variable(z_out.data, requires_grad=True)
-            
             c = Variable(c_target, requires_grad=False)
             if use_cuda:
                 c = c.cuda()
 
-            kld_coeff = kld_coef(global_step, extended=True)
-            kld = (-0.5 * t.sum(logvar - t.pow(mu,2) - t.exp(logvar) + 1, 1)).mean().squeeze()
-
+            kld_coeff = 1
+            # kld_coeff = kld_coef(global_step) test run
+            #kld_coeff = kld_coef(global_step, extended=True)
+            kld = (-0.5 * t.sum(logvar_out - t.pow(mu_out,2) - t.exp(logvar_out) + 1, 1)).mean().squeeze()
+            kld /= 79
+            
             c = c.view(c.size(0), 1)
 
             input_code = t.cat((z,c), 1)
@@ -431,128 +402,15 @@ class Controlled_Generation_Sentence(nn.Module):
             logits, _ = self.generator(generator_input, input_code, 0.0, None)
             
             # --------------
-            
-            logits = logits.view(-1, self.config.word_vocab_size)
+
+            logit_temperature = temp_coef(global_step)
+            logits = logits.view(-1, self.config.word_vocab_size) / logit_temperature 
             target = target.view(-1)
             
             # cross_entropy = F.cross_entropy(logits, target)
             log_softmax = F.log_softmax(logits)
             total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
-            cross_entropy = 80 * total_batch_loss / batch_size
-
-            # -------------
-            
-            # use this for z and z_reconstruction loss
-            softmax_output = t.exp(log_softmax)
-            
-            # both are vairables here
-            out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight)
-            out_embedding = out_embedding.view(batch_size, -1, out_embedding.size(1))[:,:-1,:]
-
-            # use this out_embedding for forward pass to get z loss
-            # use this out_mebedding for forward pass to get cross_entropy for c
-
-            # Generator loss using discriminator
-            c_reconstructed = self.sentiment_discriminator(out_embedding)
-            
-            # c_target = c_target.long()
-            c = c.long()
-            c_loss = F.cross_entropy(c_reconstructed, c.view(-1))
-
-            # Generator loss using encoder
-            encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
-            encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
-
-            # Should i use mu and logvar l2 here? 
-            z_recon, std_recon, _, mu_recon = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)            
-            
-            mahalabonis_distance = self.compute_mahalabonis(mu, mu_recon, std, std_recon)
-            z_loss = t.sum(mahalabonis_distance)/batch_size
-            
-            total_reconstruction_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
-            
-            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff
-
-        return valid
-
-    
-    def train_encoder_generator(self, data_handler):
-
-        # Two optimizers
-        encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
-        generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
-
-        def train(start_index, batch_size, use_cuda, dropout, c_target, global_step):
-            
-            encoder_optimizer.zero_grad()
-            generator_optimizer.zero_grad()
-            
-            c_target = c_target[start_index:start_index+batch_size]
-            
-            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', start_index)
-            input = [Variable(t.from_numpy(var)) for var in input]
-            input = [var.long() for var in input]
-            input = [var.cuda() if use_cuda else var for var in input]
-
-            [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
-            
-            #--------------
-
-            """
-            print 'Begin'
-            enc_params = self.encoder.named_parameters()
-            for name, p in enc_params:
-                print name, p.grad
-                break
-            """
-            
-            [batch_size, _] = encoder_word_input.size()
-            encoder_input = self.embedding(encoder_word_input, encoder_character_input)
-
-            z_out, std_out, logvar_out, mu_out = self.encode_for_z(encoder_input, batch_size, use_cuda)
-
-            # Detach the z from the existing graph
-            z = Variable(z_out.data, requires_grad=True)
-            
-            c = Variable(c_target, requires_grad=False)
-            if use_cuda:
-                c = c.cuda()
-
-            kld_coeff = kld_coef(global_step, extended=True)
-            kld = (-0.5 * t.sum(logvar_out - t.pow(mu_out,2) - t.exp(logvar_out) + 1, 1)).mean().squeeze()
-
-            c = c.view(c.size(0), 1)
-
-            input_code = t.cat((z,c), 1)
-            generator_input = self.embedding.word_embed(gen_word_input)
-            logits, _ = self.generator(generator_input, input_code, dropout, None)
-            
-            # --------------
-            
-            logits = logits.view(-1, self.config.word_vocab_size)
-            target = target.view(-1)
-            
-            # cross_entropy = F.cross_entropy(logits, target)
-            log_softmax = F.log_softmax(logits)
-            total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
-            cross_entropy = 80 * total_batch_loss / batch_size
-            
-            # vae_loss = cross_entropy +  kld # kld_coef = 1
-            
-            # vae_loss.backward(retain_variables=True)
-
-            cross_entropy.backward(retain_variables=True)
-
-            """
-            print 'CrossEntropy Backward called'
-            enc_params = self.encoder.named_parameters()
-            for name, p in enc_params:
-                print name, p.grad
-                break
-                        """
-            
-            encoder_grad_z_out = z.grad.data
-            # we can backprop encoder_grad_z_out from z_out to get encoder.grad
+            cross_entropy = total_batch_loss / batch_size
             
             #-------------VAE Loss Backpropagated-----------
                         
@@ -561,6 +419,7 @@ class Controlled_Generation_Sentence(nn.Module):
             
             # both are vairables here
             out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight)
+            # Remove last element (Assume: '|')
             out_embedding = out_embedding.view(batch_size, -1, out_embedding.size(1))[:,:-1,:]
 
             # use this out_embedding for forward pass to get z loss
@@ -573,68 +432,173 @@ class Controlled_Generation_Sentence(nn.Module):
             c = c.long()
             c_loss = F.cross_entropy(c_reconstructed, c.view(-1))
 
-            # Generator loss using encoder
-            encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
-            encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
+            total_reconstruction_loss = (self.config.lambda_c*c_loss)
+            if calc_z_loss:
+                # Generator loss using encoder
+                encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
+                encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
             
-            z_recon, std_recon, _, mu_recon = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)
+                z_recon, std_recon, _, mu_recon = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)
 
-            # Create new mu, and std fro mu_out and std_out
-            # To avoid calculating gradient wrt mu_out and std_out when calculating mahalabonis_distance
-            mu = Variable(mu_out.data, requires_grad=False)
-            std = Variable(std_out.data, requires_grad=False)
-            mahalabonis_distance = self.compute_mahalabonis(mu, mu_recon, std, std_recon)
+                # Create new mu, and std fro mu_out and std_out
+                # To avoid calculating gradient wrt mu_out and std_out when calculating mahalabonis_distance
+                mu = Variable(mu_out.data, requires_grad=False)
+                std = Variable(std_out.data, requires_grad=False)
+                mahalabonis_distance = self.compute_mahalabonis(mu, mu_recon, std, std_recon)
 
-            """
-            l2_loss= z-z_recon
-            l2_loss = l2_loss*l2_loss
-            l2_loss = t.sum(l2_loss, dim=1)
+                z_loss = t.sum(mahalabonis_distance)/batch_size
+                total_reconstruction_loss += (self.config.lambda_z*z_loss)
+            else:
+                z_loss = Variable(t.zeros(1), requires_grad=False)
+
+                                    
+            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff, logit_temperature 
+
+        return valid
+
+    def log_batch_input(self, data_handler, summary_writer, input, step):
+
+        [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
+
+        sen = ""
+        for word in encoder_word_input[0]:
+            sen = sen +  data_handler.gen_batch_loader.decode_word(word) + ' '
+        summary_writer.add_text('Encoder Word Input', sen.decode('utf-8'), step)
+
+        sen = ""
+        for word in encoder_character_input[0]:
+            sen += data_handler.gen_batch_loader.decode_characters(word)
+        summary_writer.add_text('Encoder Character Input', sen.decode('utf-8'), step)
+        
+        sen = ""
+        for word in gen_word_input[0]:
+            sen += data_handler.gen_batch_loader.decode_word(word) + ' '
+        summary_writer.add_text('Generator Word Input', sen.decode('utf-8'), step)
+
+        sen = ""
+        for word in target[0]:
+            sen += data_handler.gen_batch_loader.decode_word(word) + ' '
+        summary_writer.add_text('Target', sen.decode('utf-8'), step)
+                        
+    def train_encoder_generator(self, data_handler, summary_writer=None):
+
+        # Two optimizers
+        encoder_optimizer = Adam(self.encoder_params(), self.config.learning_rate)
+        generator_optimizer = Adam(self.generator_params(), self.config.learning_rate)
+
+        def train(start_index, batch_size, use_cuda, dropout, c_target, global_step, calc_z_loss = True):
             
-            z_loss = t.sum(t.sqrt(l2_loss))/batch_size
-            """
+            encoder_optimizer.zero_grad()
+            generator_optimizer.zero_grad()
 
-            z_loss = t.sum(mahalabonis_distance)/batch_size
-            total_reconstruction_loss = (self.config.lambda_z*z_loss) + (self.config.lambda_c*c_loss)
+            c_target = c_target[start_index:start_index+batch_size]
+            
+            input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', start_index)
+
+            #if start_index % 100 == 0 and summary_writer:
+            self.log_batch_input(data_handler, summary_writer, input, global_step)
+            
+            input = [Variable(t.from_numpy(var)) for var in input]
+            input = [var.long() for var in input]
+            input = [var.cuda() if use_cuda else var for var in input]
+
+            [encoder_word_input, encoder_character_input, gen_word_input, _ , target] = input
+            
+            #--------------
+                   
+            [batch_size, _] = encoder_word_input.size()
+            encoder_input = self.embedding(encoder_word_input, encoder_character_input)
+
+            z_out, std_out, logvar_out, mu_out = self.encode_for_z (encoder_input, batch_size, use_cuda)
+
+            z = Variable(z_out.data, requires_grad=True)
+            
+            c = Variable(c_target, requires_grad=False)
+            if use_cuda:
+                c = c.cuda()
+
+            kld_coeff = 1
+            #kld_coeff = kld_coef(global_step) # test run
+            #kld_coeff = kld_coef(global_step, extended=True)
+            kld = (-0.5 * t.sum(logvar_out - t.pow(mu_out,2) - t.exp(logvar_out) + 1, 1)).mean().squeeze()
+            kld /= 79 # Better to divide kld by 1/79 => Experiment kld_low
+            
+            c = c.view(c.size(0), 1)
+
+            input_code = t.cat((z,c), 1)
+            generator_input = self.embedding.word_embed(gen_word_input)
+            logits, _ = self.generator(generator_input, input_code, dropout, None)
+            
+            # --------------
+
+            logit_temperature = temp_coef(global_step)
+            logits = logits.view(-1, self.config.word_vocab_size) / logit_temperature 
+            target = target.view(-1)
+            
+            # cross_entropy = F.cross_entropy(logits, target)
+            log_softmax = F.log_softmax(logits)
+            total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
+            cross_entropy = total_batch_loss / batch_size
+
+            cross_entropy.backward(retain_variables=True) 
+
+            encoder_grad_z_out = z.grad.data
+            #-------------VAE Loss Backpropagated-----------
+                        
+            # use this for z and z_reconstruction loss
+            softmax_output = t.exp(log_softmax)
+            
+            # both are vairables here
+            out_embedding = t.mm(softmax_output , self.embedding.word_embed.weight)
+            # Remove last element (Assume: |)
+            out_embedding = out_embedding.view(batch_size, -1, out_embedding.size(1))[:,:-1,:]
+
+            # use this out_embedding for forward pass to get z loss
+            # use this out_mebedding for forward pass to get cross_entropy for c
+
+            # Generator loss using discriminator
+            c_reconstructed = self.sentiment_discriminator(out_embedding)
+            
+            # c_target = c_target.long()
+            c = c.long()
+            c_loss = F.cross_entropy(c_reconstructed, c.view(-1))
+
+            total_reconstruction_loss = (self.config.lambda_c*c_loss)
+
+            if calc_z_loss:
+                # Generator loss using encoder
+                encoder_character_embedding = self.embedding.get_character_embed(encoder_character_input)
+                encoder_reconstructed_input = t.cat([out_embedding, encoder_character_embedding], dim=2)
+            
+                z_recon, std_recon, _, mu_recon = self.encode_for_z(encoder_reconstructed_input, batch_size, use_cuda)
+
+                mu = Variable(mu_out.data, requires_grad=False)
+                std = Variable(std_out.data, requires_grad=False)
+
+                # Create new mu, and std fro mu_out and std_out
+                # To avoid calculating gradient wrt mu_out and std_out when calculating mahalabonis_distance
+                mahalabonis_distance = self.compute_mahalabonis(mu, mu_recon, std, std_recon)
+
+                z_loss = t.sum(mahalabonis_distance)/batch_size
+                total_reconstruction_loss += (self.config.lambda_z*z_loss)
+            else:
+                z_loss = Variable(t.zeros(1), requires_grad=False)
+
+            
             total_reconstruction_loss.backward()
             generator_optimizer.step()
 
-            """
-            print 'Encoder Gradient before Zero'
-            enc_params = self.encoder.named_parameters()
-            for name, p in enc_params:
-                print name, p.grad
-                break
-            """
-            
             encoder_optimizer.zero_grad()
-
-            """
-            print 'Encoder Gradient After Zero'
-            enc_params = self.encoder.named_parameters()
-            for name, p in enc_params:
-                print name, p.grad
-                break
-            """
-            
-            z_out.backward(encoder_grad_z_out, retain_variables=True)
-            kld_loss = kld*kld_coeff
-            kld_loss.backward()
-
-            """
-            print 'Encoder Gradient Final'
-            enc_params = self.encoder.named_parameters()
-            for name, p in enc_params:
-                print name, p.grad
-                break
-
-            sys.exit()
-            """
-            
+            total_kld_loss = kld_coeff*kld 
+            total_kld_loss.backward(retain_variables=True)
+            z_out.backward(encoder_grad_z_out)
             encoder_optimizer.step()
             
-            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff 
+            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff, logit_temperature 
 
         return train
+
+    # --------------------------Experiment New Train function end-----------------
 
     
     def initial_rvae_trainer(self, data_handler):
