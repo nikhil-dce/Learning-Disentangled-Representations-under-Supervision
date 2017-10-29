@@ -37,6 +37,11 @@ class Beam(object):
         self.nextYs = [self.tt.LongTensor(size).fill_(self.pad)]
         self.nextYs[0][0] = self.bos
 
+
+        # The softmax outputs
+        # To be used in passing gradients back
+        self.output_probs = []
+        
         # The attentions (matrix) for each time.
         self.attn = []
 
@@ -64,6 +69,9 @@ class Beam(object):
         """Advance the beam."""
         num_words = workd_lk.size(1)
 
+        # use this when returning the hypothesis 
+        self.output_probs.append(workd_lk)
+        
         # Sum the previous scores.
         if len(self.prevKs) > 0:
             beam_lk = workd_lk + self.scores.unsqueeze(1).expand_as(workd_lk)
@@ -79,8 +87,11 @@ class Beam(object):
         # word and beam each score came from
         prev_k = bestScoresId / num_words
         self.prevKs.append(prev_k)
+        # self.prevKs appends the (index of self.size best beams) out of the (last self.size beams)
+        
         self.nextYs.append(bestScoresId - prev_k * num_words)
-
+        # self.nextYs appends the (absolute index of top self.size words after this advance)
+        
         # End condition is when top-of-beam is EOS.
         if self.nextYs[-1][0] == self.eos:
             self.done = True
@@ -110,6 +121,8 @@ class Beam(object):
     def get_hyp(self, k):
         """Get hypotheses."""
         hyp = []
+        # print len(self.prevKs), len(self.nextYs), len(self.output_probs)
+                
         # print(len(self.prevKs), len(self.nextYs), len(self.attn))
         for j in range(len(self.prevKs) - 1, -1, -1):
             hyp.append(self.nextYs[j + 1][k])
@@ -117,3 +130,24 @@ class Beam(object):
 #         print "inside:", hyp
         
         return hyp[::-1]
+
+    """
+    Walk back to construct the full hypothesis
+
+    Returns:
+        * best hypothesis softmax output_probs 
+    """
+    def get_hyp_probs(self):
+
+        hyp = []
+        k = 0
+        
+        for j in range(len(self.prevKs) - 1, -1, -1):
+            # Iterate through time steps
+            # Best beam at time step j
+            k = self.prevKs[j][k]
+            hyp.append(self.output_probs[j][k])
+            # k = self.prevKs[j][k]
+
+        return hyp[::-1]
+        

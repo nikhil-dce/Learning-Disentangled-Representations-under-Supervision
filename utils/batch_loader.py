@@ -26,7 +26,7 @@ class BatchLoader:
                     i.e. word representation and character-aware representation
 
                 blind_symbol - special symbol to fill spaces in every word in character-aware representation
-                    to make all words be the same lenght
+                    to make all words be the same length
                 pad_token - the same special symbol as blind_symbol, but in case of lines of words
                 go_token - start of sequence symbol
                 end_token - end of sequence symbol
@@ -83,7 +83,6 @@ class BatchLoader:
         self.go_token = '>'
         self.end_token = '|'
         self.a_token = '?'
-
                 
         idx_exists = fold(f_and,
                           [os.path.exists(file) for file in idx_files],
@@ -96,7 +95,6 @@ class BatchLoader:
             print "BatchLoader Train Embedding...==========================>"
             self.preprocess(data, idx_files, is_sentence=sentence_array)
         elif idx_exists:
-            print "BatchLoader Idx Exists...==========================>"
             self.load_preprocessed(data, idx_files, is_sentence=sentence_array)
             print('preprocessed data was found and loaded')
         else:
@@ -206,24 +204,35 @@ class BatchLoader:
         self.create_tensors(data_words)
         self.just_words = [word for line in self.word_tensor[0] for word in line]
 
-        
     '''
     Requires data preprocessed data in the form of sentences 
     separated by '\n'
     '''
     def load_preprocessed(self, data, idx_files, is_sentence = False):
 
+        
         # Following Data from training txt file
         # Data words for each line
         if not is_sentence:
             data_words = [[line.split() for line in target.split('\n')] for target in data]
         else: # Sentences already in array. No need for split ('\n')
             data_words = [[line.split() for line in target] for target in data]
-            # Max sequence length
+            
+        print 'Dataset Size: %d' % len(data[0])
+
+        # Max sequence length
         self.max_seq_len = np.amax([len(line) for target in data_words for line in target])
         # Num lines in data array
         self.num_lines = [len(target) for target in data_words]
 
+        self.train_lines = 5 * self.num_lines[0] // 6
+        self.val_lines = self.num_lines[0] - self.train_lines
+        
+        print 'Total Lines: %d'%self.num_lines[0]
+        print 'Total train lines: %d'%self.train_lines
+        print 'Total val lines: %d'%self.val_lines
+        
+    
         # Following data from word and char vocab
         # Simple array of words and chars
         [self.idx_to_word, self.idx_to_char] = [cPickle.load(open(file, "rb")) for file in idx_files]
@@ -244,8 +253,10 @@ class BatchLoader:
             [[list(map(self.encode_characters, line)) for line in target] for target in data_words])
         
     def next_batch(self, batch_size, target_str, start_index):
-        # target = 0 if target_str == 'train' else 1
-        
+
+        if target_str == 'valid':
+            start_index = start_index + self.train_lines
+
         target = 0
         indexes = np.array(range(start_index, start_index+batch_size))
  
@@ -255,11 +266,11 @@ class BatchLoader:
         max_input_seq_len = np.amax(input_seq_len)
 
         encoded_words = [[idx for idx in line] for line in encoder_word_input]
+        
         decoder_word_input = [[self.word_to_idx[self.go_token]] + line for line in encoder_word_input]
         decoder_character_input = [[self.encode_characters(self.go_token)] + line for line in encoder_character_input]
         decoder_output = [line + [self.word_to_idx[self.end_token]] for line in encoded_words]
-
-        # sorry
+                
         for i, line in enumerate(decoder_word_input):
             line_len = input_seq_len[i]
             to_add = max_input_seq_len - line_len

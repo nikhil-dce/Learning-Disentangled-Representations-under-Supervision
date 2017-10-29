@@ -1,0 +1,12 @@
+Z_reconstruction : 
+L_{z}(\theta_G) = \mathbb{E}_{p(z)p(c)}[log_{q_E}(z|\overset{\sim}{G}(z,c))]
+
+Disc c:
+L_{s}(\theta_D) = \mathbb{E}_{\chi_{L}}[log_{q_D}(c_L|x_L)]
+
+Disc c generated:
+L_{u}(\theta_D) = \mathbb{E}_{p_G(\hat{x}|z,c)p(z)p(c)}[log_{q_D}(c|\hat{x}) +
+ H(q_D(\acute{c}|\hat{x}))]
+
+VAE_Loss:
+L_{VAE}(\theta_G, \theta_E; x) = -KL(q_E(z|x) || p(z))  + \mathbb{E}_{q_E(z|x)q_D(c|x)}[log_{p_G}(x|z,c}) 

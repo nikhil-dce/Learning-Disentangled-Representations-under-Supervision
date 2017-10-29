@@ -25,7 +25,18 @@ def handle_inputs(inputs, use_cuda):
     return result
 
 
-def kld_coef(i):
+def kld_coef(i, extended=False):
     import math
-    return (math.tanh((i - 3500)/1000) + 1)/2
+    if (not extended):
+        return (math.tanh((i - 3500)/1000) + 1)/2
+    else:
+        return (math.tanh((i - 50000)/15000) +1)/2
 
+def temp_coef(i):
+    import numpy as np
+
+    initial_temp = 1.0
+    min_temp = 0.1
+    ANNEAL_RATE = 0.0003
+    
+    return np.maximum(initial_temp * np.exp(-ANNEAL_RATE*i), min_temp)
