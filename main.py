@@ -105,12 +105,12 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                                                                                                                            data_handler.batch_size,
                                                                                                                            use_cuda, dropout,
                                                                                                                            c_target=c, global_step=total_steps,
-                                                                                                                           calc_z_loss=True)
+                                                                                                                           calc_z_loss=False)
         
         ce_loss_val = cross_entropy.data.cpu()[0]
         kld_val = kld.data.cpu()[0]
-        total_generator_loss_val = total_generator_loss.cpu()[0]
-        total_encoder_loss_val = total_encoder_loss.cpu()[0]
+        total_generator_loss_val = total_generator_loss.data.cpu()[0]
+        total_encoder_loss_val = total_encoder_loss.data.cpu()[0]
         z_loss_val = z_loss.data.cpu()[0]
         c_loss_val = c_loss.data.cpu()[0]
             
@@ -154,7 +154,9 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             valid_gen_loss_val = 0
             valid_z_loss_val = 0
             valid_c_loss_val = 0
-
+            valid_total_enc_loss_val = 0
+            valid_total_gen_loss_val = 0
+            
             num_valid_iterations = data_handler.gen_batch_loader.val_lines / data_handler.batch_size
             valid_index = 0
 
@@ -169,7 +171,7 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                                                                                                     data_handler.batch_size,
                                                                                                     use_cuda, c_target=c,
                                                                                                     global_step=total_steps,
-                                                                                                    calc_z_loss=True)
+                                                                                                                  calc_z_loss=False)
             
                 valid_ce_val += valid_cross_entropy.data.cpu()[0]
                 valid_kld_val += valid_kld.data.cpu()[0]
@@ -190,8 +192,8 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             print ('Encoder-Generator Data')
             print ('Total Valid Batches%d' % (num_valid_iterations))
             print ('Enc-Gen Current Step: %d' % total_steps)
-            print ('Encoder Loss (VAE Loss): %f' % valid_vae_loss_val)
-            print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (valid_vae_loss_val+valid_gen_loss_val))
+            print ('Encoder Loss (VAE Loss): %f' % valid_total_enc_loss_val)
+            print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (valid_total_gen_loss_val))
             print ('Generator z Loss: %f' % valid_z_loss_val)
             print ('Generator c Loss: %f' % valid_c_loss_val)
             print ('Cross Entropy: %f' % valid_ce_val)
