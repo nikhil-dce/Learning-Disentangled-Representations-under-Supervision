@@ -389,11 +389,10 @@ class Controlled_Generation_Sentence(nn.Module):
             if use_cuda:
                 c = c.cuda()
 
-            kld_coeff = 1
-            # kld_coeff = kld_coef(global_step) test run
+            #kld_coeff = 1
+            kld_coeff = kld_coef(global_step) 
             #kld_coeff = kld_coef(global_step, extended=True)
             kld = (-0.5 * t.sum(logvar_out - t.pow(mu_out,2) - t.exp(logvar_out) + 1, 1)).mean().squeeze()
-            kld /= 79
             
             c = c.view(c.size(0), 1)
 
@@ -451,8 +450,11 @@ class Controlled_Generation_Sentence(nn.Module):
             else:
                 z_loss = Variable(t.zeros(1), requires_grad=False)
 
-                                    
-            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff, logit_temperature 
+            total_kld_loss = kld_coeff*kld
+            total_cross_entropy = cross_entropy * 79
+            total_encoder_loss = total_cross_entropy + total_kld_loss
+            total_generator_loss = total_cross_entropy + total_kld_loss + total_reconstruction_loss
+            return cross_entropy, kld, z_loss, c_loss, kld_coeff, logit_temperature, total_encoder_loss, total_generator_loss 
 
         return valid
 
@@ -496,7 +498,7 @@ class Controlled_Generation_Sentence(nn.Module):
             input = data_handler.gen_batch_loader.next_batch(batch_size, 'train', start_index)
 
             #if start_index % 100 == 0 and summary_writer:
-            self.log_batch_input(data_handler, summary_writer, input, global_step)
+            #self.log_batch_input(data_handler, summary_writer, input, global_step)
             
             input = [Variable(t.from_numpy(var)) for var in input]
             input = [var.long() for var in input]
@@ -517,12 +519,11 @@ class Controlled_Generation_Sentence(nn.Module):
             if use_cuda:
                 c = c.cuda()
 
-            kld_coeff = 1
-            #kld_coeff = kld_coef(global_step) # test run
+            #kld_coeff = 1
+            kld_coeff = kld_coef(global_step) # test run
             #kld_coeff = kld_coef(global_step, extended=True)
             kld = (-0.5 * t.sum(logvar_out - t.pow(mu_out,2) - t.exp(logvar_out) + 1, 1)).mean().squeeze()
-            kld /= 79 # Better to divide kld by 1/79 => Experiment kld_low
-            
+                        
             c = c.view(c.size(0), 1)
 
             input_code = t.cat((z,c), 1)
@@ -540,7 +541,8 @@ class Controlled_Generation_Sentence(nn.Module):
             total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
             cross_entropy = total_batch_loss / batch_size
 
-            cross_entropy.backward(retain_variables=True) 
+            total_cross_entropy = cross_entropy * 79
+            total_cross_entropy.backward(retain_variables=True) 
 
             encoder_grad_z_out = z.grad.data
             #-------------VAE Loss Backpropagated-----------
@@ -593,8 +595,11 @@ class Controlled_Generation_Sentence(nn.Module):
             total_kld_loss.backward(retain_variables=True)
             z_out.backward(encoder_grad_z_out)
             encoder_optimizer.step()
+
+            total_encoder_loss = total_cross_entropy + total_kld_loss
+            total_generator_loss = total_cross_entropy + total_kld_loss + total_reconstruction_loss
             
-            return cross_entropy, kld, total_reconstruction_loss, z_loss, c_loss, kld_coeff, logit_temperature 
+            return cross_entropy, kld, z_loss, c_loss, kld_coeff, logit_temperature, total_encoder_loss, total_generator_loss 
 
         return train
 

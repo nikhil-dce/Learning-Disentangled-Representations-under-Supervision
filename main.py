@@ -101,16 +101,16 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
         start_index = batch_index*data_handler.batch_size
 
         # total_steps is used for kld linear annealing
-        cross_entropy, kld, generated_recon_loss, z_loss, c_loss, kld_coeff, temp_coef = train_enc_gen(start_index,
-                                                                                                data_handler.batch_size,
-                                                                                                use_cuda, dropout,
-                                                                                                c_target=c, global_step=total_steps,
-                                                                                                calc_z_loss=True)
-
+        cross_entropy, kld, z_loss, c_loss, kld_coeff, temp_coef, total_encoder_loss, total_generator_loss = train_enc_gen(start_index,
+                                                                                                                           data_handler.batch_size,
+                                                                                                                           use_cuda, dropout,
+                                                                                                                           c_target=c, global_step=total_steps,
+                                                                                                                           calc_z_loss=True)
+        
         ce_loss_val = cross_entropy.data.cpu()[0]
         kld_val = kld.data.cpu()[0]
-        gen_loss_val = generated_recon_loss.data.cpu()[0]
-        vae_loss_val = kld_val*kld_coeff+ce_loss_val
+        total_generator_loss_val = total_generator_loss.cpu()[0]
+        total_encoder_loss_val = total_encoder_loss.cpu()[0]
         z_loss_val = z_loss.data.cpu()[0]
         c_loss_val = c_loss.data.cpu()[0]
             
@@ -121,16 +121,16 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             print ('Encoder-Generator Data')
             print ('Batch_Index: %d/%d' % (batch_index, num_batches))
             print ('Enc-Gen Training Step: %d' % total_steps)
-            print ('Encoder Loss (VAE Loss): %f' % vae_loss_val)
-            print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (vae_loss_val+gen_loss_val))
+            print ('Encoder Loss (VAE Loss): %f' % total_encoder_loss_val)
+            print ('Generator Loss (VAE_Loss+ lambda_z*z_recon_loss + lambda_c*c_recon_loss): %f' % (total_generator_loss_val))
             print ('Generator z Loss: %f' % z_loss_val)
             print ('Generator c Loss: %f' % c_loss_val)
             print ('Cross Entropy: %f' % ce_loss_val)
             print ('KLD: %f' % kld_val)
                 
                 
-            summary_writer.add_scalar('train_enc_gen/encoder_loss', vae_loss_val, total_steps)
-            summary_writer.add_scalar('train_enc_gen/generator_loss', (vae_loss_val+gen_loss_val), total_steps)
+            summary_writer.add_scalar('train_enc_gen/encoder_loss', total_encoder_loss_val, total_steps)
+            summary_writer.add_scalar('train_enc_gen/generator_loss', total_generator_loss_val, total_steps)
             summary_writer.add_scalar('train_enc_gen/generator_z_loss', z_loss_val, total_steps)
             summary_writer.add_scalar('train_enc_gen/generator_c_loss', c_loss_val, total_steps)
             summary_writer.add_scalar('train_enc_gen/cross_entropy', ce_loss_val, total_steps)
@@ -163,25 +163,28 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
                 valid_index = valid_step*data_handler.batch_size
                     
                 # total_steps is used for kld annealing
-                valid_cross_entropy, valid_kld, valid_generated_recon_loss, valid_z_loss, valid_c_loss, valid_kld_coeff, valid_temp_coeff = valid_enc_gen(valid_index,
-                                                                                                                                        data_handler.batch_size,
-                                                                                                                                        use_cuda, c_target=c,
-                                                                                                                                        global_step=total_steps,
-                                                                                                                                        calc_z_loss=True)
+                valid_cross_entropy, valid_kld, valid_z_loss, valid_c_loss, \
+                    valid_kld_coeff, valid_temp_coeff, valid_total_enc_loss, valid_total_gen_loss = \
+                                                                                                    valid_enc_gen(valid_index,
+                                                                                                    data_handler.batch_size,
+                                                                                                    use_cuda, c_target=c,
+                                                                                                    global_step=total_steps,
+                                                                                                    calc_z_loss=True)
             
                 valid_ce_val += valid_cross_entropy.data.cpu()[0]
                 valid_kld_val += valid_kld.data.cpu()[0]
-                valid_gen_loss_val += valid_generated_recon_loss.data.cpu()[0]
+                valid_total_enc_loss_val += valid_total_enc_loss.data.cpu()[0]
+                valid_total_gen_loss_val += valid_total_gen_loss.data.cpu()[0]
                 valid_z_loss_val += valid_z_loss.data.cpu()[0]
                 valid_c_loss_val += valid_c_loss.data.cpu()[0]
 
             valid_ce_val /= num_valid_iterations
             valid_kld_val /= num_valid_iterations
-            valid_gen_loss_val /= num_valid_iterations
+            valid_total_gen_loss_val /= num_valid_iterations
+            valid_total_enc_loss_val /= num_valid_iterations
             valid_z_loss_val /= num_valid_iterations
             valid_c_loss_val /= num_valid_iterations
-            valid_vae_loss_val = valid_kld_val*valid_kld_coeff+valid_ce_val
-
+            
             print ('\n')
             print ('----------Validation--------------')
             print ('Encoder-Generator Data')
@@ -194,8 +197,8 @@ def train_encoder_decoder(cgn_model, config, data_handler, num_epochs, use_cuda,
             print ('Cross Entropy: %f' % valid_ce_val)
             print ('KLD: %f' % valid_kld_val)
                 
-            summary_writer.add_scalar('valid_enc_gen/encoder_loss', valid_vae_loss_val, total_steps)
-            summary_writer.add_scalar('valid_enc_gen/generator_loss', (valid_vae_loss_val+valid_gen_loss_val), total_steps)
+            summary_writer.add_scalar('valid_enc_gen/encoder_loss', valid_total_enc_loss_val, total_steps)
+            summary_writer.add_scalar('valid_enc_gen/generator_loss', valid_total_gen_loss_val, total_steps)
             summary_writer.add_scalar('valid_enc_gen/generator_z_loss', valid_z_loss_val, total_steps)
             summary_writer.add_scalar('valid_enc_gen/generator_c_loss', valid_c_loss_val, total_steps)
             summary_writer.add_scalar('valid_enc_gen/cross_entropy', valid_ce_val, total_steps)

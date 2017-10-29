@@ -95,7 +95,6 @@ class BatchLoader:
             print "BatchLoader Train Embedding...==========================>"
             self.preprocess(data, idx_files, is_sentence=sentence_array)
         elif idx_exists:
-            print "BatchLoader Idx Exists...==========================>"
             self.load_preprocessed(data, idx_files, is_sentence=sentence_array)
             print('preprocessed data was found and loaded')
         else:
