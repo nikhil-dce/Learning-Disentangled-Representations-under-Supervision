@@ -1,6 +1,12 @@
 # Controllable Generation of Sentences
 
-- This is a pytorch implementation of the Encoder-Generator-Discriminator architecture for learning disentagled repressentations of text
+- This is a pytorch implementation of the Encoder-Generator-Discriminator architecture for learning disentagled representations of text
+
+```
+Toward Controlled Generation of Text
+Zhiting Hu, Zichao Yang, Xiaodan Liang, Ruslan Salakhutdinov, Eric P. Xing ;
+Proceedings of the 34th International Conference on Machine Learning, PMLR 70:1587-1596, 2017.
+```
 
 ### Architecture Diagram
 <p align="center"><img src="extras/cgn_network.png" width="800"></p>
