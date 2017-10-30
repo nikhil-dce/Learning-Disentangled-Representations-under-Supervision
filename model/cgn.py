@@ -408,8 +408,9 @@ class Controlled_Generation_Sentence(nn.Module):
             
             # cross_entropy = F.cross_entropy(logits, target)
             log_softmax = F.log_softmax(logits)
-            total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
-            cross_entropy = total_batch_loss / batch_size
+            cross_entropy = F.nll_loss(log_softmax, target)
+            # total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
+            # cross_entropy = total_batch_loss / batch_size
             
             #-------------VAE Loss Backpropagated-----------
                         
@@ -538,9 +539,10 @@ class Controlled_Generation_Sentence(nn.Module):
             
             # cross_entropy = F.cross_entropy(logits, target)
             log_softmax = F.log_softmax(logits)
-            total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
-            cross_entropy = total_batch_loss / batch_size
-
+            cross_entropy = F.nll_loss(log_softmax, target)
+            # total_batch_loss = F.nll_loss(log_softmax, target, size_average=False)
+            # cross_entropy = total_batch_loss / batch_size
+                        
             total_cross_entropy = cross_entropy * 79
             total_cross_entropy.backward(retain_variables=True) 
 
