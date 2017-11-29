@@ -94,6 +94,8 @@ class BatchLoader:
         if train_embedding:
             print "BatchLoader Train Embedding...==========================>"
             self.preprocess(data, idx_files, is_sentence=sentence_array)
+        elif data is None and idx_exists: # to sample from generator
+            self.load_only_vocab(idx_files)
         elif idx_exists:
             self.load_preprocessed(data, idx_files, is_sentence=sentence_array)
             print('preprocessed data was found and loaded')
@@ -204,12 +206,26 @@ class BatchLoader:
         self.create_tensors(data_words)
         self.just_words = [word for line in self.word_tensor[0] for word in line]
 
+    def load_only_vocab(self, idx_files):
+
+        # Following data from word and char vocab
+        # Simple array of words and chars
+        [self.idx_to_word, self.idx_to_char] = [cPickle.load(open(file, "rb")) for file in idx_files]
+        # Word vocab size and Chars vocab size
+        [self.words_vocab_size, self.chars_vocab_size] = [len(idx) for idx in [self.idx_to_word, self.idx_to_char]]
+        # Reverse mapping
+        [self.word_to_idx, self.char_to_idx] = [dict(zip(idx, range(len(idx)))) for idx in
+                                                [self.idx_to_word, self.idx_to_char]]
+
+        # Max word len
+        self.max_word_len = np.amax([len(word) for word in self.idx_to_word])
+        self.max_seq_len = 15
+        
     '''
     Requires data preprocessed data in the form of sentences 
     separated by '\n'
     '''
     def load_preprocessed(self, data, idx_files, is_sentence = False):
-
         
         # Following Data from training txt file
         # Data words for each line
@@ -225,14 +241,13 @@ class BatchLoader:
         # Num lines in data array
         self.num_lines = [len(target) for target in data_words]
 
-        self.train_lines = 5 * self.num_lines[0] // 6
+        self.train_lines = 900000
         self.val_lines = self.num_lines[0] - self.train_lines
         
         print 'Total Lines: %d'%self.num_lines[0]
         print 'Total train lines: %d'%self.train_lines
         print 'Total val lines: %d'%self.val_lines
-        
-    
+
         # Following data from word and char vocab
         # Simple array of words and chars
         [self.idx_to_word, self.idx_to_char] = [cPickle.load(open(file, "rb")) for file in idx_files]
@@ -241,6 +256,7 @@ class BatchLoader:
         # Reverse mapping
         [self.word_to_idx, self.char_to_idx] = [dict(zip(idx, range(len(idx)))) for idx in
                                                 [self.idx_to_word, self.idx_to_char]]
+
         # Max word len
         self.max_word_len = np.amax([len(word) for word in self.idx_to_word])
         self.create_tensors(data_words)

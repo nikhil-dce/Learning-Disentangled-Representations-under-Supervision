@@ -37,6 +37,6 @@ def temp_coef(i):
 
     initial_temp = 1.0
     min_temp = 0.1
-    ANNEAL_RATE = 0.0003
+    ANNEAL_RATE = 0.00002
     
     return np.maximum(initial_temp * np.exp(-ANNEAL_RATE*i), min_temp)

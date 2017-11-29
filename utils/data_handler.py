@@ -24,9 +24,11 @@ class DataHandler:
                  batch_size=32, load_generator=True):
 
         self.batch_size = batch_size
+        self.generator_data = None
 
-        with open(generator_file, 'rb') as f:
-            self.generator_data = [pkl.load(f)]
+        if generator_file:
+            with open(generator_file, 'rb') as f:
+                self.generator_data = [pkl.load(f)]
                     
         self.gen_batch_loader = BatchLoader(self.generator_data, vocab_files, sentence_array=True)
         self.vocab_size = self.gen_batch_loader.words_vocab_size
@@ -42,8 +44,8 @@ class DataHandler:
         self.total_sentiment = len(set(self.sentiment_discriminator_Y))
 
         # Divide into 1:3
-        self.train_sentiment_size =  self.sentiment_total_size // 3
-        self.dev_sentiment_size = 2 * self.sentiment_total_size // 3
+        self.train_sentiment_size = 2 * self.sentiment_total_size // 3
+        self.dev_sentiment_size = self.sentiment_total_size // 3
 
         self.num_train_sentiment_batches = self.train_sentiment_size / self.batch_size
         self.num_dev_sentiment_batches = self.dev_sentiment_size / self.batch_size
@@ -56,7 +58,7 @@ class DataHandler:
         np.random.shuffle(indices)
 
         self.sentiment_train_indices = indices[:self.train_sentiment_size]
-        self.sentiment_dev_indices = indices[:self.dev_sentiment_size]
+        self.sentiment_dev_indices = indices[self.train_sentiment_size:(self.dev_sentiment_size+self.train_sentiment_size)]
 
         data_words = [line.split() for line in self.sentiment_discriminator_X]
 
